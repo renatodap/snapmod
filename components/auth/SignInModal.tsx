@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Mail, Sparkles } from 'lucide-react';
+import { X, Mail, Sparkles, Lock, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '@/components/providers/AuthProvider';
 
 interface SignInModalProps {
@@ -10,12 +10,19 @@ interface SignInModalProps {
   onClose: () => void;
 }
 
+type AuthMode = 'signin' | 'signup' | 'reset';
+type AuthMethod = 'magic-link' | 'password';
+
 export function SignInModal({ isOpen, onClose }: SignInModalProps) {
+  const [mode, setMode] = useState<AuthMode>('signin');
+  const [method, setMethod] = useState<AuthMethod>('magic-link');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSent, setIsSent] = useState(false);
   const [error, setError] = useState('');
-  const { signIn } = useAuth();
+  const { signIn, signInWithPassword, signUp, resetPassword } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,12 +30,38 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
     setIsLoading(true);
 
     try {
-      const { error } = await signIn(email);
+      let result;
 
-      if (error) {
-        setError(error.message);
+      if (mode === 'reset') {
+        // Password reset
+        result = await resetPassword(email);
+        if (!result.error) {
+          setIsSent(true);
+        }
+      } else if (method === 'magic-link') {
+        // Magic link sign in
+        result = await signIn(email);
+        if (!result.error) {
+          setIsSent(true);
+        }
+      } else if (mode === 'signup') {
+        // Sign up with password
+        result = await signUp(email, password);
+        if (!result.error) {
+          setIsSent(true);
+        }
       } else {
-        setIsSent(true);
+        // Sign in with password
+        result = await signInWithPassword(email, password);
+        if (!result.error) {
+          // Password sign in is immediate, close modal
+          handleClose();
+          return;
+        }
+      }
+
+      if (result?.error) {
+        setError(result.error.message);
       }
     } catch (err) {
       setError('An unexpected error occurred. Please try again.');
@@ -39,9 +72,27 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
 
   const handleClose = () => {
     setEmail('');
+    setPassword('');
+    setShowPassword(false);
     setError('');
     setIsSent(false);
+    setMode('signin');
+    setMethod('magic-link');
     onClose();
+  };
+
+  const getTitle = () => {
+    if (isSent) return 'Check Your Email';
+    if (mode === 'reset') return 'Reset Password';
+    if (mode === 'signup') return 'Create Account';
+    return 'Welcome Back';
+  };
+
+  const getSubtitle = () => {
+    if (isSent) return null;
+    if (mode === 'reset') return 'We\'ll send you a reset link';
+    if (mode === 'signup') return 'Sign up to get started';
+    return 'Sign in to continue';
   };
 
   if (!isOpen) return null;
@@ -70,11 +121,9 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                   <Sparkles className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold text-white">
-                    {isSent ? 'Check Your Email' : 'Welcome to SnapMod'}
-                  </h2>
-                  {!isSent && (
-                    <p className="text-white/60 text-sm">Sign in or create an account</p>
+                  <h2 className="text-2xl font-bold text-white">{getTitle()}</h2>
+                  {getSubtitle() && (
+                    <p className="text-white/60 text-sm">{getSubtitle()}</p>
                   )}
                 </div>
               </div>
@@ -90,59 +139,191 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
           {/* Content */}
           <div className="p-6">
             {!isSent ? (
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-white/80 mb-2">
-                    Email Address
-                  </label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" />
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="w-full pl-11 pr-4 py-3 bg-white/10 text-white placeholder-white/40 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                      autoFocus
-                      disabled={isLoading}
-                    />
-                  </div>
-                </div>
-
-                {error && (
-                  <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3">
-                    <p className="text-red-400 text-sm">{error}</p>
+              <>
+                {/* Tabs for Sign In / Sign Up (only when not in reset mode) */}
+                {mode !== 'reset' && (
+                  <div className="flex gap-2 mb-6 bg-white/5 p-1 rounded-xl">
+                    <button
+                      onClick={() => setMode('signin')}
+                      className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition ${
+                        mode === 'signin'
+                          ? 'bg-white/10 text-white'
+                          : 'text-white/60 hover:text-white'
+                      }`}
+                    >
+                      Sign In
+                    </button>
+                    <button
+                      onClick={() => setMode('signup')}
+                      className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition ${
+                        mode === 'signup'
+                          ? 'bg-white/10 text-white'
+                          : 'text-white/60 hover:text-white'
+                      }`}
+                    >
+                      Sign Up
+                    </button>
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  disabled={isLoading || !email}
-                  className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold py-4 rounded-xl hover:shadow-lg hover:shadow-blue-500/50 transition active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isLoading ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Sending Magic Link...
-                    </>
-                  ) : (
-                    <>
-                      <Mail className="w-5 h-5" />
-                      Send Magic Link
-                    </>
-                  )}
-                </button>
+                {/* Method Toggle (only for signin/signup, not reset) */}
+                {mode !== 'reset' && (
+                  <div className="flex gap-2 mb-6">
+                    <button
+                      onClick={() => setMethod('magic-link')}
+                      className={`flex-1 py-3 px-4 rounded-xl font-medium text-sm transition border ${
+                        method === 'magic-link'
+                          ? 'bg-blue-500/20 border-blue-500/50 text-white'
+                          : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'
+                      }`}
+                    >
+                      <Mail className="w-4 h-4 inline mr-2" />
+                      Magic Link
+                    </button>
+                    <button
+                      onClick={() => setMethod('password')}
+                      className={`flex-1 py-3 px-4 rounded-xl font-medium text-sm transition border ${
+                        method === 'password'
+                          ? 'bg-blue-500/20 border-blue-500/50 text-white'
+                          : 'bg-white/5 border-white/10 text-white/60 hover:text-white hover:bg-white/10'
+                      }`}
+                    >
+                      <Lock className="w-4 h-4 inline mr-2" />
+                      Password
+                    </button>
+                  </div>
+                )}
 
-                <div className="space-y-2">
-                  <p className="text-white/60 text-sm text-center">
-                    ✨ No password needed - just click the magic link in your email
-                  </p>
-                  <p className="text-white/40 text-xs text-center">
-                    New user? Your account will be created automatically
-                  </p>
-                </div>
-              </form>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  {/* Email Field */}
+                  <div>
+                    <label className="block text-sm font-medium text-white/80 mb-2">
+                      Email Address
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" />
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="you@example.com"
+                        className="w-full pl-11 pr-4 py-3 bg-white/10 text-white placeholder-white/40 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                        autoFocus
+                        disabled={isLoading}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Password Field (for password method, not for reset) */}
+                  {method === 'password' && mode !== 'reset' && (
+                    <div>
+                      <label className="block text-sm font-medium text-white/80 mb-2">
+                        Password
+                      </label>
+                      <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" />
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder={mode === 'signup' ? 'Choose a password' : 'Enter your password'}
+                          className="w-full pl-11 pr-11 py-3 bg-white/10 text-white placeholder-white/40 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          required
+                          minLength={6}
+                          disabled={isLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/60 transition"
+                        >
+                          {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        </button>
+                      </div>
+                      {mode === 'signup' && (
+                        <p className="text-white/40 text-xs mt-1">At least 6 characters</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Error Message */}
+                  {error && (
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                      <p className="text-red-400 text-sm">{error}</p>
+                    </div>
+                  )}
+
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    disabled={isLoading || !email || (method === 'password' && mode !== 'reset' && !password)}
+                    className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold py-4 rounded-xl hover:shadow-lg hover:shadow-blue-500/50 transition active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isLoading ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        {method === 'magic-link' || mode === 'reset' ? 'Sending...' : mode === 'signup' ? 'Creating Account...' : 'Signing In...'}
+                      </>
+                    ) : (
+                      <>
+                        {method === 'magic-link' || mode === 'reset' ? (
+                          <>
+                            <Mail className="w-5 h-5" />
+                            {mode === 'reset' ? 'Send Reset Link' : 'Send Magic Link'}
+                          </>
+                        ) : mode === 'signup' ? (
+                          <>
+                            <Sparkles className="w-5 h-5" />
+                            Create Account
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="w-5 h-5" />
+                            Sign In
+                          </>
+                        )}
+                      </>
+                    )}
+                  </button>
+
+                  {/* Helper Text */}
+                  {mode !== 'reset' && (
+                    <div className="text-center space-y-2">
+                      {method === 'magic-link' && (
+                        <p className="text-white/60 text-sm">
+                          ✨ We'll email you a magic link for password-free sign in
+                        </p>
+                      )}
+                      {method === 'password' && mode === 'signin' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMode('reset');
+                            setMethod('magic-link');
+                          }}
+                          className="text-blue-400 hover:text-blue-300 transition text-sm"
+                        >
+                          Forgot password?
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Back to Sign In (from reset) */}
+                  {mode === 'reset' && (
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => setMode('signin')}
+                        className="text-blue-400 hover:text-blue-300 transition text-sm"
+                      >
+                        ← Back to sign in
+                      </button>
+                    </div>
+                  )}
+                </form>
+              </>
             ) : (
               <div className="text-center space-y-4">
                 <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto">
@@ -151,16 +332,21 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
 
                 <div>
                   <h3 className="text-xl font-bold text-white mb-2">
-                    Magic Link Sent!
+                    {mode === 'reset' ? 'Reset Link Sent!' : mode === 'signup' ? 'Check Your Email!' : 'Magic Link Sent!'}
                   </h3>
                   <p className="text-white/60 text-sm">
-                    We sent a sign-in link to <strong className="text-white">{email}</strong>
+                    We sent {mode === 'reset' ? 'a password reset link' : mode === 'signup' ? 'a confirmation link' : 'a sign-in link'} to{' '}
+                    <strong className="text-white">{email}</strong>
                   </p>
                 </div>
 
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
                   <p className="text-white/80 text-sm">
-                    Click the link in your email to sign in. You can close this window.
+                    {mode === 'reset'
+                      ? 'Click the link in your email to reset your password.'
+                      : mode === 'signup'
+                      ? 'Click the link in your email to confirm your account and sign in.'
+                      : 'Click the link in your email to sign in. You can close this window.'}
                   </p>
                 </div>
 

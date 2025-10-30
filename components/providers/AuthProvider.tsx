@@ -9,6 +9,9 @@ interface AuthContextType {
   isPro: boolean;
   isLoading: boolean;
   signIn: (email: string) => Promise<{ error: Error | null }>;
+  signInWithPassword: (email: string, password: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string) => Promise<{ error: Error | null }>;
+  resetPassword: (email: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
 }
@@ -65,6 +68,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   };
 
+  // Sign in with password
+  const signInWithPassword = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      console.error('[Auth] Password sign in error:', error);
+      return { error };
+    }
+
+    return { error: null };
+  };
+
+  // Sign up with password
+  const signUp = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      console.error('[Auth] Sign up error:', error);
+      return { error };
+    }
+
+    return { error: null };
+  };
+
+  // Reset password
+  const resetPassword = async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+    });
+
+    if (error) {
+      console.error('[Auth] Password reset error:', error);
+      return { error };
+    }
+
+    return { error: null };
+  };
+
   // Sign out
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -106,6 +156,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isPro,
         isLoading,
         signIn,
+        signInWithPassword,
+        signUp,
+        resetPassword,
         signOut,
         refreshSession,
       }}
