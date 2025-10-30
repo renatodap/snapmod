@@ -8,7 +8,6 @@ interface AuthContextType {
   user: User | null;
   isPro: boolean;
   isLoading: boolean;
-  signIn: (email: string) => Promise<{ error: Error | null }>;
   signInWithPassword: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string) => Promise<{ error: Error | null }>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
@@ -49,23 +48,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Sign in with magic link
-  const signIn = async (email: string) => {
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
-      },
-    });
-
-    if (error) {
-      console.error('[Auth] Sign in error:', error);
-      return { error };
-    }
-
-    return { error: null };
   };
 
   // Sign in with password
@@ -155,7 +137,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isPro,
         isLoading,
-        signIn,
         signInWithPassword,
         signUp,
         resetPassword,
