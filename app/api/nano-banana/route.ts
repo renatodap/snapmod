@@ -188,6 +188,16 @@ export async function POST(req: Request) {
       }, { status: 500 });
     }
 
+    // Null check - this should never happen due to earlier check, but TypeScript needs it
+    if (!imageResult) {
+      console.error(`[${requestId}] imageResult is null after extraction`);
+      return Response.json({
+        error: 'Failed to extract image',
+        userMessage: 'Failed to extract image from API response. Please try again.',
+        details: 'Image extraction returned null'
+      }, { status: 500 });
+    }
+
     // Comprehensive validation to detect text responses
     console.log(`[${requestId}] Validating response content...`);
 
