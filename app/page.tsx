@@ -1,18 +1,22 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, Upload, Sparkles, Download, X, Maximize2, History as HistoryIcon } from 'lucide-react';
+import { Camera, Upload, Sparkles, Download, X, Maximize2, History as HistoryIcon, Save, Sliders } from 'lucide-react';
 import { PromptInput } from '@/components/editor/PromptInput';
 import { VersionTimeline } from '@/components/editor/VersionTimeline';
-import { ComparisonSlider } from '@/components/editor/ComparisonSlider';
+import { ComparisonModes } from '@/components/editor/ComparisonModes';
 import { HistoryDrawer } from '@/components/editor/HistoryDrawer';
 import { PromptPresets, type Preset } from '@/components/editor/PromptPresets';
 import { UpgradeModal } from '@/components/UpgradeModal';
 import { FloatingShareButton } from '@/components/ShareButton';
+import { ExportModal } from '@/components/editor/ExportModal';
+import { CustomPresetsPanel } from '@/components/editor/CustomPresetsPanel';
+import { type CustomPreset } from '@/lib/custom-presets';
+import { PromptBuilder, type ComposedPrompt, type PromptModifier } from '@/components/editor/PromptBuilder';
 import { useNanoBanana } from '@/hooks/useNanoBanana';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { compressImage, downloadImage } from '@/lib/image-utils';
+import { compressImage, downloadImage, getImageDimensions } from '@/lib/image-utils';
 import { versionStorage, type Version } from '@/lib/version-storage';
 import { promptHistory } from '@/lib/prompt-history';
 import { checkUsageLimit, incrementUsageCount } from '@/lib/usage-limits';
@@ -32,12 +36,41 @@ export default function Home() {
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [usageData, setUsageData] = useState(() => checkUsageLimit());
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+  const [showCustomPresets, setShowCustomPresets] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [composedPrompt, setComposedPrompt] = useState<ComposedPrompt>({
+    basePrompt: '',
+    modifiers: [],
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { generate, isGenerating, progress, error } = useNanoBanana();
 
   const currentVersion = versions[currentVersionIndex];
   const displayImage = currentVersion?.image || photo;
+
+  // Get image dimensions when displayImage changes
+  useEffect(() => {
+    if (displayImage) {
+      getImageDimensions(displayImage).then(setImageDimensions).catch(console.error);
+    }
+  }, [displayImage]);
+
+  // Sync composed prompt base with simple prompt
+  useEffect(() => {
+    if (!advancedMode) {
+      setComposedPrompt(prev => ({ ...prev, basePrompt: prompt }));
+    }
+  }, [prompt, advancedMode]);
+
+  // Handle export
+  const handleExport = () => {
+    if (!displayImage) return;
+    console.log('[Export] Opening export modal');
+    setShowExportModal(true);
+  };
 
   // Handle camera - triggers native camera app to take a photo
   const handleCamera = () => {
@@ -297,6 +330,32 @@ export default function Home() {
     setPrompt(preset.prompt);
   };
 
+  // Handle custom preset selection
+  const handleCustomPresetSelect = (preset: CustomPreset) => {
+    console.log('[CustomPreset] Custom preset selected:', preset.name);
+    trackPresetUsed(preset.name, preset.basePrompt);
+
+    if (advancedMode && preset.modifiers) {
+      // Apply to composed prompt if in advanced mode
+      setComposedPrompt({
+        basePrompt: preset.basePrompt,
+        modifiers: preset.modifiers as PromptModifier[],
+      });
+    } else {
+      // Apply to simple prompt
+      setPrompt(preset.basePrompt);
+    }
+    setShowCustomPresets(false);
+  };
+
+  // Handle advanced prompt generation
+  const handleAdvancedGenerate = (finalPrompt: string) => {
+    console.log('[AdvancedPrompt] Generated prompt:', finalPrompt);
+    setPrompt(finalPrompt);
+    // Trigger submit with the composed prompt
+    setTimeout(() => handleSubmit(), 100);
+  };
+
   // Reset
   const reset = () => {
     console.log('[Reset] Resetting app to start');
@@ -433,12 +492,32 @@ export default function Home() {
                       </div>
                       <h1 className="text-xl font-bold text-white">SnapMod</h1>
                     </div>
-                    <button
-                      onClick={reset}
-                      className="text-white/60 hover:text-white transition p-2"
-                    >
-                      <X className="w-6 h-6" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setAdvancedMode(!advancedMode)}
+                        className={`transition p-2 flex items-center gap-1 ${
+                          advancedMode ? 'text-blue-400' : 'text-white/60 hover:text-white'
+                        }`}
+                        aria-label="Advanced Mode"
+                      >
+                        <Sliders className="w-5 h-5" />
+                        <span className="text-sm hidden sm:inline">Advanced</span>
+                      </button>
+                      <button
+                        onClick={() => setShowCustomPresets(true)}
+                        className="text-white/60 hover:text-white transition p-2 flex items-center gap-1"
+                        aria-label="My Presets"
+                      >
+                        <Save className="w-5 h-5" />
+                        <span className="text-sm hidden sm:inline">Presets</span>
+                      </button>
+                      <button
+                        onClick={reset}
+                        className="text-white/60 hover:text-white transition p-2"
+                      >
+                        <X className="w-6 h-6" />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Version Counter */}
@@ -455,6 +534,19 @@ export default function Home() {
 
                 {/* Floating Action Buttons */}
                 <div className="absolute right-4 bottom-32 flex flex-col gap-3">
+                  {/* Export Button */}
+                  {displayImage && (
+                    <motion.button
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      onClick={handleExport}
+                      className="w-14 h-14 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-white hover:bg-white/30 transition shadow-lg active:scale-95"
+                      aria-label="Export"
+                    >
+                      <Download className="w-6 h-6" />
+                    </motion.button>
+                  )}
+
                   {/* Share Button */}
                   {versions.length > 0 && displayImage && (
                     <FloatingShareButton
@@ -500,8 +592,8 @@ export default function Home() {
                 />
               )}
 
-              {/* Preset Prompts - Above Prompt Input */}
-              {photo && !isGenerating && (
+              {/* Preset Prompts - Above Prompt Input (only in simple mode) */}
+              {photo && !isGenerating && !advancedMode && (
                 <div className="px-4 pb-2">
                   <PromptPresets
                     onSelectPreset={handlePresetSelect}
@@ -510,14 +602,27 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Prompt Input - Floating Bottom */}
-              <PromptInput
-                value={prompt}
-                onChange={setPrompt}
-                onSubmit={handleSubmit}
-                onFocusChange={setIsInputFocused}
-                disabled={isGenerating}
-              />
+              {/* Prompt Input or Advanced Builder */}
+              {!advancedMode ? (
+                <PromptInput
+                  value={prompt}
+                  onChange={setPrompt}
+                  onSubmit={handleSubmit}
+                  onFocusChange={setIsInputFocused}
+                  disabled={isGenerating}
+                />
+              ) : (
+                <div className="bg-gradient-to-t from-black via-black/95 to-transparent p-4 pb-safe">
+                  <div className="max-w-2xl mx-auto">
+                    <PromptBuilder
+                      value={composedPrompt}
+                      onChange={setComposedPrompt}
+                      onGenerate={handleAdvancedGenerate}
+                      disabled={isGenerating}
+                    />
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -572,10 +677,10 @@ export default function Home() {
         </AnimatePresence>
       </main>
 
-      {/* Comparison Slider - Full Screen Overlay */}
+      {/* Comparison Modes - Full Screen Overlay */}
       <AnimatePresence>
         {compareMode && photo && currentVersion && (
-          <ComparisonSlider
+          <ComparisonModes
             beforeImage={photo}
             afterImage={currentVersion.image}
             beforeLabel="Original"
@@ -599,6 +704,33 @@ export default function Home() {
         remaining={usageData.remaining}
         resetsAt={usageData.resetsAt}
       />
+
+      {/* Export Modal */}
+      <AnimatePresence>
+        {showExportModal && displayImage && (
+          <ExportModal
+            imageDataUrl={displayImage}
+            originalWidth={imageDimensions.width}
+            originalHeight={imageDimensions.height}
+            filename={currentVersion ? `snapmod-v${currentVersionIndex + 1}` : 'snapmod-edit'}
+            onClose={() => setShowExportModal(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Custom Presets Panel */}
+      <AnimatePresence>
+        {showCustomPresets && (
+          <CustomPresetsPanel
+            currentPrompt={advancedMode ? composedPrompt.basePrompt : prompt}
+            currentModifiers={advancedMode ? composedPrompt.modifiers : []}
+            beforeImage={photo || undefined}
+            afterImage={displayImage || undefined}
+            onSelectPreset={handleCustomPresetSelect}
+            onClose={() => setShowCustomPresets(false)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Usage Indicator - Top Right */}
       {step === 'photo' && !usageData.isPro && (
