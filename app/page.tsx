@@ -28,7 +28,7 @@ type Step = 'start' | 'photo' | 'processing' | 'result';
 
 export default function Home() {
   // Auth
-  const { user, isPro, isLoading: authLoading } = useAuth();
+  const { user, isPro, isLoading: authLoading, signOut } = useAuth();
 
   // State
   const [step, setStep] = useState<Step>('start');
@@ -443,17 +443,62 @@ export default function Home() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="h-full flex flex-col items-center justify-center p-6"
+              className="h-full flex flex-col items-center justify-center p-6 relative"
             >
+              {/* Auth Button in Top Right */}
+              <div className="absolute top-6 right-6">
+                {!user ? (
+                  <button
+                    onClick={() => setShowSignInModal(true)}
+                    className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-3 rounded-full font-semibold text-sm flex items-center gap-2 active:scale-95 transition shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Sign In / Sign Up
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-3 bg-white/10 px-4 py-2 rounded-full">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                      <span className="text-white/80 text-sm">{user.email}</span>
+                    </div>
+                    {isPro && (
+                      <span className="bg-gradient-to-r from-blue-500 to-purple-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                        PRO
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="w-24 h-24 bg-blue-500/20 rounded-full flex items-center justify-center mb-6">
                 <Sparkles className="w-12 h-12 text-blue-500" />
               </div>
               <h2 className="text-3xl font-bold text-white mb-2 text-center">
                 AI Photo Magic
               </h2>
-              <p className="text-white/60 text-center mb-12">
+              <p className="text-white/60 text-center mb-8">
                 Transform your photos instantly
               </p>
+
+              {/* Show usage info */}
+              {!authLoading && usageData && (
+                <div className="mb-6 text-center">
+                  {isPro ? (
+                    <div className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 px-4 py-2 rounded-full">
+                      <Sparkles className="w-4 h-4 text-blue-400" />
+                      <span className="text-white/90 text-sm font-medium">Unlimited Edits</span>
+                    </div>
+                  ) : user ? (
+                    <div className="text-white/60 text-sm">
+                      {usageData.remaining} free edits remaining today
+                    </div>
+                  ) : (
+                    <div className="text-white/60 text-sm">
+                      5 free edits per day • Sign in to track your usage
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="w-full max-w-sm space-y-4">
                 <button
@@ -533,20 +578,45 @@ export default function Home() {
                       {!user ? (
                         <button
                           onClick={() => setShowSignInModal(true)}
-                          className="text-white/60 hover:text-white transition p-2 flex items-center gap-1"
+                          className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-3 py-1.5 rounded-full font-semibold text-xs flex items-center gap-1 active:scale-95 transition shadow-sm"
                           aria-label="Sign In"
                         >
-                          <span className="text-sm">Sign In</span>
+                          Sign In
                         </button>
                       ) : (
-                        <button
-                          onClick={() => {/* We'll add sign out later */}}
-                          className="text-green-400 transition p-2 flex items-center gap-1"
-                          aria-label="Signed In"
-                          title={user.email || 'Signed in'}
-                        >
-                          <span className="text-sm">●</span>
-                        </button>
+                        <div className="relative group">
+                          <button
+                            className="flex items-center gap-2 bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-full transition"
+                            aria-label="Account menu"
+                          >
+                            <div className="w-2 h-2 bg-green-400 rounded-full" />
+                            <span className="text-white text-xs max-w-[80px] truncate">
+                              {user.email?.split('@')[0]}
+                            </span>
+                            {isPro && (
+                              <span className="bg-gradient-to-r from-blue-500 to-purple-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                                PRO
+                              </span>
+                            )}
+                          </button>
+
+                          {/* Dropdown menu */}
+                          <div className="absolute right-0 top-full mt-2 bg-gray-900 border border-white/10 rounded-xl shadow-xl overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[160px]">
+                            <div className="p-2">
+                              <div className="px-3 py-2 text-white/60 text-xs border-b border-white/10">
+                                {user.email}
+                              </div>
+                              <button
+                                onClick={async () => {
+                                  await signOut();
+                                }}
+                                className="w-full px-3 py-2 text-left text-white/80 hover:bg-white/10 rounded-lg transition text-sm mt-1"
+                              >
+                                Sign Out
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       )}
                       <button
                         onClick={reset}

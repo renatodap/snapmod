@@ -71,10 +71,10 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                 </div>
                 <div>
                   <h2 className="text-2xl font-bold text-white">
-                    {isSent ? 'Check Your Email' : 'Sign In to SnapMod'}
+                    {isSent ? 'Check Your Email' : 'Welcome to SnapMod'}
                   </h2>
                   {!isSent && (
-                    <p className="text-white/60 text-sm">No password needed</p>
+                    <p className="text-white/60 text-sm">Sign in or create an account</p>
                   )}
                 </div>
               </div>
@@ -134,9 +134,14 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                   )}
                 </button>
 
-                <p className="text-white/40 text-xs text-center">
-                  We'll email you a magic link for a password-free sign in
-                </p>
+                <div className="space-y-2">
+                  <p className="text-white/60 text-sm text-center">
+                    ✨ No password needed - just click the magic link in your email
+                  </p>
+                  <p className="text-white/40 text-xs text-center">
+                    New user? Your account will be created automatically
+                  </p>
+                </div>
               </form>
             ) : (
               <div className="text-center space-y-4">
