@@ -8,6 +8,7 @@ interface PromptInputProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onFocusChange?: (focused: boolean) => void;
   disabled?: boolean;
   placeholder?: string;
 }
@@ -28,7 +29,7 @@ interface PromptInputProps {
  * - Tap outside to collapse
  * - Enter to submit (keyboard)
  */
-export function PromptInput({ value, onChange, onSubmit, disabled = false, placeholder = 'Describe your edit...' }: PromptInputProps) {
+export function PromptInput({ value, onChange, onSubmit, onFocusChange, disabled = false, placeholder = 'Describe your edit...' }: PromptInputProps) {
   const [expanded, setExpanded] = useState(false);
   const [focused, setFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -48,12 +49,14 @@ export function PromptInput({ value, onChange, onSubmit, disabled = false, place
     console.log('[PromptInput] Focused');
     setFocused(true);
     setExpanded(true);
+    onFocusChange?.(true);
   };
 
   // Collapse on blur (only if empty)
   const handleBlur = () => {
     console.log('[PromptInput] Blurred');
     setFocused(false);
+    onFocusChange?.(false);
     if (value.trim().length === 0) {
       setExpanded(false);
     }

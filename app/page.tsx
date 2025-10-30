@@ -2,12 +2,16 @@
 
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, Upload, Sparkles, Download, X } from 'lucide-react';
+import { Camera, Upload, Sparkles, Download, X, Maximize2, History as HistoryIcon } from 'lucide-react';
 import { PromptInput } from '@/components/editor/PromptInput';
 import { VersionTimeline } from '@/components/editor/VersionTimeline';
+import { ComparisonSlider } from '@/components/editor/ComparisonSlider';
+import { HistoryDrawer } from '@/components/editor/HistoryDrawer';
 import { useNanoBanana } from '@/hooks/useNanoBanana';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { compressImage, downloadImage } from '@/lib/image-utils';
 import { versionStorage, type Version } from '@/lib/version-storage';
+import { promptHistory } from '@/lib/prompt-history';
 
 type Step = 'start' | 'photo' | 'processing' | 'result';
 
@@ -18,6 +22,9 @@ export default function Home() {
   const [versions, setVersions] = useState<Version[]>([]);
   const [currentVersionIndex, setCurrentVersionIndex] = useState<number>(0);
   const [sessionId] = useState<string>(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+  const [compareMode, setCompareMode] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { generate, isGenerating, progress, error } = useNanoBanana();
@@ -139,12 +146,21 @@ export default function Home() {
     console.log('[Submit] Starting processing with prompt:', prompt);
     console.log('[Submit] Prompt length:', prompt.length, 'characters');
 
+    // Save prompt to history
+    try {
+      await promptHistory.add(prompt.trim());
+      console.log('[Submit] Prompt added to history');
+    } catch (historyError) {
+      console.error('[Submit] Failed to save prompt to history:', historyError);
+      // Continue anyway
+    }
+
     setStep('processing');
 
     try {
       const result = await generate({
         prompt: prompt.trim(),
-        imageUrl: photo,
+        imageUrl: displayImage || undefined, // Use current display image (could be a version)
         mode: 'edit'
       });
 
@@ -208,6 +224,28 @@ export default function Home() {
     setCurrentVersionIndex(index);
   };
 
+  // Toggle comparison mode
+  const toggleCompare = () => {
+    console.log('[Compare] Toggling comparison mode');
+    if (!photo || versions.length === 0) {
+      console.log('[Compare] Cannot compare - no versions yet');
+      return;
+    }
+    setCompareMode(!compareMode);
+  };
+
+  // Toggle history drawer
+  const toggleHistory = () => {
+    console.log('[History] Toggling history drawer');
+    setHistoryOpen(!historyOpen);
+  };
+
+  // Handle prompt selection from history
+  const handlePromptSelect = (selectedPrompt: string) => {
+    console.log('[History] Prompt selected from history:', selectedPrompt);
+    setPrompt(selectedPrompt);
+  };
+
   // Reset
   const reset = () => {
     console.log('[Reset] Resetting app to start');
@@ -216,8 +254,33 @@ export default function Home() {
     setPrompt('');
     setVersions([]);
     setCurrentVersionIndex(0);
+    setCompareMode(false);
+    setHistoryOpen(false);
     console.log('[Reset] App reset complete');
   };
+
+  // Keyboard shortcuts for power users
+  useKeyboardShortcuts({
+    onPreviousVersion: () => {
+      if (currentVersionIndex > -1) {
+        handleVersionChange(currentVersionIndex - 1);
+      }
+    },
+    onNextVersion: () => {
+      if (currentVersionIndex < versions.length - 1) {
+        handleVersionChange(currentVersionIndex + 1);
+      }
+    },
+    onToggleCompare: toggleCompare,
+    onToggleHistory: toggleHistory,
+    onCloseOverlays: () => {
+      if (compareMode) setCompareMode(false);
+      if (historyOpen) setHistoryOpen(false);
+    },
+    isInputFocused,
+    hasVersions: versions.length > 0,
+    canCompare: versions.length > 0 && !!photo
+  });
 
   return (
     <div className="fixed inset-0 bg-black flex flex-col">
@@ -302,11 +365,13 @@ export default function Home() {
             >
               {/* Photo Display - Full Screen */}
               <div className="flex-1 relative bg-black flex items-center justify-center">
-                <img
-                  src={displayImage}
-                  alt="Your photo"
-                  className="w-full h-full object-contain"
-                />
+                {displayImage && (
+                  <img
+                    src={displayImage}
+                    alt="Your photo"
+                    className="w-full h-full object-contain"
+                  />
+                )}
 
                 {/* Header Overlay */}
                 <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-4">
@@ -336,6 +401,34 @@ export default function Home() {
                     </motion.div>
                   )}
                 </div>
+
+                {/* Floating Action Buttons */}
+                <div className="absolute right-4 bottom-32 flex flex-col gap-3">
+                  {/* Compare Button */}
+                  {versions.length > 0 && (
+                    <motion.button
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      onClick={toggleCompare}
+                      className="w-14 h-14 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-white hover:bg-white/30 transition shadow-lg active:scale-95"
+                      aria-label="Compare"
+                    >
+                      <Maximize2 className="w-6 h-6" />
+                    </motion.button>
+                  )}
+
+                  {/* History Button */}
+                  <motion.button
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: 0.1 }}
+                    onClick={toggleHistory}
+                    className="w-14 h-14 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-white hover:bg-white/30 transition shadow-lg active:scale-95"
+                    aria-label="History"
+                  >
+                    <HistoryIcon className="w-6 h-6" />
+                  </motion.button>
+                </div>
               </div>
 
               {/* Version Timeline - Above Prompt Input */}
@@ -353,6 +446,7 @@ export default function Home() {
                 value={prompt}
                 onChange={setPrompt}
                 onSubmit={handleSubmit}
+                onFocusChange={setIsInputFocused}
                 disabled={isGenerating}
               />
             </motion.div>
@@ -408,6 +502,26 @@ export default function Home() {
 
         </AnimatePresence>
       </main>
+
+      {/* Comparison Slider - Full Screen Overlay */}
+      <AnimatePresence>
+        {compareMode && photo && currentVersion && (
+          <ComparisonSlider
+            beforeImage={photo}
+            afterImage={currentVersion.image}
+            beforeLabel="Original"
+            afterLabel={`Version ${currentVersionIndex + 1}`}
+            onClose={() => setCompareMode(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* History Drawer - Swipe Up Panel */}
+      <HistoryDrawer
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onSelectPrompt={handlePromptSelect}
+      />
     </div>
   );
 }
