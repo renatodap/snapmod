@@ -32,3 +32,51 @@ body {
     display: none;
   }
 }
+
+/* Safe Area Insets for iOS notches and home indicators */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .pt-safe {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+
+  .px-safe {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+
+  /* Full safe area padding */
+  .p-safe {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+    padding-right: max(1rem, env(safe-area-inset-right));
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    padding-left: max(1rem, env(safe-area-inset-left));
+  }
+}
+
+/* Safe area heights for fixed/absolute positioned elements */
+.h-screen-safe {
+  height: 100vh;
+  height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+}
+
+.min-h-screen-safe {
+  min-height: 100vh;
+  min-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+}
+
+/* Desktop image display optimization */
+@media (min-width: 768px) {
+  /* Ensure images use available space efficiently on desktop */
+  .desktop-image-container {
+    max-height: calc(100vh - 200px);
+  }
+
+  /* Prevent unnecessary scrolling on desktop */
+  .desktop-no-scroll {
+    overflow: hidden;
+  }
+}

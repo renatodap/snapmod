@@ -8,6 +8,46 @@ interface NanaBananaRequest {
   aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3';
 }
 
+// System prompts to guide the AI model's behavior
+const SYSTEM_PROMPTS = {
+  edit: `You are a professional photo editing AI. When given an image and editing instructions:
+
+CRITICAL RULES:
+1. PRESERVE the original composition, framing, and subject matter
+2. Treat instructions as FILTERS/ENHANCEMENTS, not transformations
+3. Maintain original resolution and aspect ratio
+4. Apply changes subtly and naturally - avoid over-processing
+5. Keep the same subjects, objects, and overall scene intact
+6. DO NOT regenerate or recreate the image - only apply the requested edits as filters
+
+INTERPRETATION GUIDE:
+- "increase sharpness" → enhance edge definition, add clarity
+- "make cinematic" → adjust color grading (teal/orange tones), add subtle vignette
+- "boost colors" → increase saturation by 15-25%, not 100%
+- "fix lighting" → balance exposure, recover highlights/shadows
+- "professional look" → subtle contrast boost, color correction
+- "bokeh" or "depth of field" → blur background while keeping subject sharp
+- "vintage" → add film grain, adjust color temperature, slight fade
+- "golden hour" → warm color temperature, soft lighting
+- "HDR" → enhance dynamic range, detail in shadows and highlights
+
+OUTPUT REQUIREMENTS:
+- Return the EDITED version of the input image
+- Maintain same dimensions and format
+- Apply changes as a layer/filter overlay, not a recreation
+- Preserve all original subjects, people, objects, and scene elements`,
+
+  generate: `You are a professional AI image generator. Create high-quality, photorealistic images based on user descriptions.
+
+QUALITY STANDARDS:
+- High resolution and sharp details
+- Natural lighting and realistic colors
+- Professional composition and framing
+- Avoid artifacts, distortions, or uncanny elements
+
+Follow user instructions precisely while maintaining photographic realism.`
+};
+
 export async function POST(req: Request) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   console.log(`[${requestId}] API request received`);
@@ -43,9 +83,19 @@ export async function POST(req: Request) {
     console.log(`[${requestId}] Validation passed`);
     console.log(`[${requestId}] Processing request:`, { mode, promptLength: prompt.length, hasImage: !!imageUrl });
 
-    // Build content array for OpenRouter
-    console.log(`[${requestId}] Building content array for mode: ${mode}`);
-    const content: any[] = [];
+    // Build messages array with system prompt
+    console.log(`[${requestId}] Building messages array for mode: ${mode}`);
+    const messages: any[] = [];
+
+    // Add system prompt first to guide the model's behavior
+    messages.push({
+      role: 'system',
+      content: mode === 'edit' ? SYSTEM_PROMPTS.edit : SYSTEM_PROMPTS.generate
+    });
+    console.log(`[${requestId}] System prompt added for mode: ${mode}`);
+
+    // Build user content array
+    const userContent: any[] = [];
 
     // Add image first if editing
     if (mode === 'edit' && imageUrl) {
@@ -56,35 +106,42 @@ export async function POST(req: Request) {
 
       console.log(`[${requestId}] Image data size: ${base64Data.length} characters`);
 
-      content.push({
+      userContent.push({
         type: 'image_url',
         image_url: {
           url: `data:image/jpeg;base64,${base64Data}`
         }
       });
-      console.log(`[${requestId}] Image added to content array`);
+      console.log(`[${requestId}] Image added to user content array`);
     }
 
-    // Add text prompt - simpler for image generation models
-    content.push({
+    // Add text prompt
+    userContent.push({
       type: 'text',
       text: prompt
     });
-    console.log(`[${requestId}] Text prompt added to content array`);
+    console.log(`[${requestId}] User prompt added to content array`);
 
-    console.log(`[${requestId}] Content array built with ${content.length} items`);
-    console.log(`[${requestId}] Final content structure:`, JSON.stringify(content, null, 2).substring(0, 1000));
+    // Add user message with content
+    messages.push({
+      role: 'user',
+      content: userContent
+    });
+
+    console.log(`[${requestId}] Messages array built with ${messages.length} messages`);
+    console.log(`[${requestId}] System prompt length: ${SYSTEM_PROMPTS[mode].length} characters`);
     console.log(`[${requestId}] Sending request to OpenRouter...`);
 
     const requestBody = {
       model: 'google/gemini-2.5-flash-image-preview',
-      messages: [{
-        role: 'user',
-        content: content
-      }]
+      messages: messages
     };
 
-    console.log(`[${requestId}] Request body:`, JSON.stringify(requestBody, null, 2).substring(0, 1000));
+    console.log(`[${requestId}] Request body structure:`, {
+      model: requestBody.model,
+      messageCount: requestBody.messages.length,
+      hasSystemPrompt: requestBody.messages[0].role === 'system'
+    });
 
     // Call OpenRouter
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {

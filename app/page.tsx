@@ -305,7 +305,7 @@ export default function Home() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto pb-safe">
         <AnimatePresence mode="wait">
           {/* Start: Camera or Upload */}
           {step === 'start' && (
@@ -364,12 +364,12 @@ export default function Home() {
               className="h-full flex flex-col"
             >
               {/* Photo Display - Full Screen */}
-              <div className="flex-1 relative bg-black flex items-center justify-center">
+              <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
                 {displayImage && (
                   <img
                     src={displayImage}
                     alt="Your photo"
-                    className="w-full h-full object-contain"
+                    className="max-w-full max-h-full object-contain"
                   />
                 )}
 
