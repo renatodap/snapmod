@@ -146,20 +146,42 @@ export async function POST(req: Request) {
 
     if (messageImages && messageImages.length > 0) {
       console.log(`[${requestId}] Found image in images array!`);
-      console.log(`[${requestId}] First image:`, messageImages[0]);
+      console.log(`[${requestId}] Images array length:`, messageImages.length);
+      console.log(`[${requestId}] First image type:`, typeof messageImages[0]);
+      console.log(`[${requestId}] First image (full):`, JSON.stringify(messageImages[0]).substring(0, 500));
 
-      // The image might be a URL or base64 string
+      // The image might be a URL or base64 string or object with various formats
       const firstImage = messageImages[0];
 
       if (typeof firstImage === 'string') {
+        console.log(`[${requestId}] Image is a string`);
         imageResult = firstImage;
-      } else if (firstImage?.url) {
-        imageResult = firstImage.url;
-      } else if (firstImage?.b64_json) {
-        imageResult = `data:image/png;base64,${firstImage.b64_json}`;
+      } else if (typeof firstImage === 'object' && firstImage !== null) {
+        console.log(`[${requestId}] Image is an object, keys:`, Object.keys(firstImage));
+
+        // Try various possible properties
+        if (firstImage.url) {
+          console.log(`[${requestId}] Found .url property`);
+          imageResult = firstImage.url;
+        } else if (firstImage.b64_json) {
+          console.log(`[${requestId}] Found .b64_json property`);
+          imageResult = `data:image/png;base64,${firstImage.b64_json}`;
+        } else if (firstImage.data) {
+          console.log(`[${requestId}] Found .data property`);
+          imageResult = firstImage.data;
+        } else if (firstImage.image) {
+          console.log(`[${requestId}] Found .image property`);
+          imageResult = firstImage.image;
+        } else if (firstImage.base64) {
+          console.log(`[${requestId}] Found .base64 property`);
+          imageResult = `data:image/png;base64,${firstImage.base64}`;
+        } else {
+          console.error(`[${requestId}] Unknown image object structure:`, firstImage);
+        }
       }
 
-      console.log(`[${requestId}] Extracted image result:`, imageResult?.substring(0, 100));
+      console.log(`[${requestId}] Extracted image result (first 100 chars):`, imageResult?.substring(0, 100));
+      console.log(`[${requestId}] Image result length:`, imageResult?.length || 0);
     } else if (messageContent && messageContent.trim().length > 0) {
       console.log(`[${requestId}] Found image in content field`);
       imageResult = messageContent;
@@ -191,10 +213,22 @@ export async function POST(req: Request) {
     // Null check - this should never happen due to earlier check, but TypeScript needs it
     if (!imageResult) {
       console.error(`[${requestId}] imageResult is null after extraction`);
+      console.error(`[${requestId}] Images array was:`, messageImages);
+      console.error(`[${requestId}] Content was:`, messageContent);
+
       return Response.json({
         error: 'Failed to extract image',
         userMessage: 'Failed to extract image from API response. Please try again.',
-        details: 'Image extraction returned null'
+        details: 'Image extraction returned null',
+        debug: {
+          requestId,
+          hasImages: !!messageImages,
+          imagesLength: messageImages?.length,
+          firstImage: messageImages?.[0],
+          firstImageType: typeof messageImages?.[0],
+          firstImageKeys: messageImages?.[0] && typeof messageImages[0] === 'object' ? Object.keys(messageImages[0]) : null,
+          contentLength: messageContent?.length || 0
+        }
       }, { status: 500 });
     }
 
