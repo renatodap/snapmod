@@ -1,0 +1,5 @@
+# robots.txt for SnapMod
+User-agent: *
+Allow: /
+
+Sitemap: https://snapmod.vercel.app/sitemap.xml
