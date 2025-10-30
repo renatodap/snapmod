@@ -1,6 +1,8 @@
 export const runtime = 'edge';
 export const maxDuration = 60;
 
+import { checkRateLimit, getIdentifierFromRequest, formatResetTime } from '@/lib/rate-limit';
+
 interface NanaBananaRequest {
   prompt: string;
   imageUrl?: string;
@@ -53,6 +55,31 @@ export async function POST(req: Request) {
   console.log(`[${requestId}] API request received`);
 
   try {
+    // Rate limiting check
+    const identifier = getIdentifierFromRequest(req);
+    const rateLimit = checkRateLimit(identifier, 20, 60000); // 20 requests per minute
+
+    console.log(`[${requestId}] Rate limit check:`, {
+      identifier: identifier.substring(0, 20),
+      allowed: rateLimit.allowed,
+      remaining: rateLimit.remaining,
+    });
+
+    if (!rateLimit.allowed) {
+      const retryAfter = formatResetTime(rateLimit.resetAt);
+      console.error(`[${requestId}] Rate limit exceeded for ${identifier}`);
+      return Response.json({
+        error: 'Rate limit exceeded',
+        userMessage: `Too many requests. Please wait ${retryAfter} before trying again.`,
+        retryAfter,
+      }, {
+        status: 429,
+        headers: {
+          'Retry-After': String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)),
+        },
+      });
+    }
+
     console.log(`[${requestId}] Parsing request body...`);
     const { prompt, imageUrl, mode } = await req.json() as NanaBananaRequest;
 

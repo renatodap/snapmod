@@ -7,11 +7,16 @@ import { PromptInput } from '@/components/editor/PromptInput';
 import { VersionTimeline } from '@/components/editor/VersionTimeline';
 import { ComparisonSlider } from '@/components/editor/ComparisonSlider';
 import { HistoryDrawer } from '@/components/editor/HistoryDrawer';
+import { PromptPresets, type Preset } from '@/components/editor/PromptPresets';
+import { UpgradeModal } from '@/components/UpgradeModal';
+import { FloatingShareButton } from '@/components/ShareButton';
 import { useNanoBanana } from '@/hooks/useNanoBanana';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { compressImage, downloadImage } from '@/lib/image-utils';
 import { versionStorage, type Version } from '@/lib/version-storage';
 import { promptHistory } from '@/lib/prompt-history';
+import { checkUsageLimit, incrementUsageCount } from '@/lib/usage-limits';
+import { track, trackImageUpload, trackEditStart, trackEditComplete, trackEditFailed, trackPresetUsed, trackDownload, trackVersionChange, trackComparisonView, trackHistoryOpened } from '@/lib/analytics';
 
 type Step = 'start' | 'photo' | 'processing' | 'result';
 
@@ -25,6 +30,8 @@ export default function Home() {
   const [compareMode, setCompareMode] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [usageData, setUsageData] = useState(() => checkUsageLimit());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { generate, isGenerating, progress, error } = useNanoBanana();
@@ -63,6 +70,7 @@ export default function Home() {
         const compressed = await compressImage(file);
         console.log('[Camera] Image compressed, size:', compressed.length);
 
+        trackImageUpload(file);
         setPhoto(compressed);
         setStep('photo');
         console.log('[Camera] Photo set, moving to photo step');
@@ -107,6 +115,7 @@ export default function Home() {
       const compressed = await compressImage(file);
       console.log('[Upload] Image compressed, size:', compressed.length);
 
+      trackImageUpload(file);
       setPhoto(compressed);
       setStep('photo');
       console.log('[Upload] Photo set, moving to photo step');
@@ -143,8 +152,17 @@ export default function Home() {
       return;
     }
 
+    // Check usage limits
+    const usage = checkUsageLimit();
+    if (!usage.allowed) {
+      console.log('[Submit] Usage limit reached, showing upgrade modal');
+      setUpgradeModalOpen(true);
+      return;
+    }
+
     console.log('[Submit] Starting processing with prompt:', prompt);
     console.log('[Submit] Prompt length:', prompt.length, 'characters');
+    console.log('[Submit] Edits remaining today:', usage.remaining);
 
     // Save prompt to history
     try {
@@ -154,6 +172,9 @@ export default function Home() {
       console.error('[Submit] Failed to save prompt to history:', historyError);
       // Continue anyway
     }
+
+    trackEditStart(prompt.trim(), 'edit');
+    const startTime = Date.now();
 
     setStep('processing');
 
@@ -173,6 +194,14 @@ export default function Home() {
 
       if (result.success && result.image) {
         console.log('[Submit] Image generated successfully. Creating version...');
+
+        // Track success
+        const duration = Date.now() - startTime;
+        trackEditComplete(prompt.trim(), duration, result.cached || false);
+
+        // Increment usage count
+        incrementUsageCount();
+        setUsageData(checkUsageLimit());
 
         // Create new version
         const newVersion: Version = {
@@ -205,6 +234,9 @@ export default function Home() {
       } else {
         console.error('[Submit] Generation failed:', result.error);
 
+        // Track failure
+        trackEditFailed(result.error || 'Unknown error', prompt.trim());
+
         // Use userMessage if available from API, otherwise use generic error
         const errorMessage = result.userMessage || result.error || 'Failed to process image. Please try again.';
         alert(errorMessage);
@@ -213,6 +245,11 @@ export default function Home() {
       }
     } catch (err) {
       console.error('[Submit] Unexpected error during generation:', err);
+
+      // Track failure
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      trackEditFailed(errorMsg, prompt.trim());
+
       alert('An unexpected error occurred. Please try again.');
       setStep('photo');
     }
@@ -221,6 +258,7 @@ export default function Home() {
   // Navigate versions
   const handleVersionChange = (index: number) => {
     console.log('[Version] Navigating to version:', index);
+    trackVersionChange(currentVersionIndex, index);
     setCurrentVersionIndex(index);
   };
 
@@ -231,12 +269,18 @@ export default function Home() {
       console.log('[Compare] Cannot compare - no versions yet');
       return;
     }
+    if (!compareMode) {
+      trackComparisonView();
+    }
     setCompareMode(!compareMode);
   };
 
   // Toggle history drawer
   const toggleHistory = () => {
     console.log('[History] Toggling history drawer');
+    if (!historyOpen) {
+      trackHistoryOpened();
+    }
     setHistoryOpen(!historyOpen);
   };
 
@@ -244,6 +288,13 @@ export default function Home() {
   const handlePromptSelect = (selectedPrompt: string) => {
     console.log('[History] Prompt selected from history:', selectedPrompt);
     setPrompt(selectedPrompt);
+  };
+
+  // Handle preset selection
+  const handlePresetSelect = (preset: Preset) => {
+    console.log('[Preset] Preset selected:', preset.label);
+    trackPresetUsed(preset.label, preset.prompt);
+    setPrompt(preset.prompt);
   };
 
   // Reset
@@ -404,6 +455,14 @@ export default function Home() {
 
                 {/* Floating Action Buttons */}
                 <div className="absolute right-4 bottom-32 flex flex-col gap-3">
+                  {/* Share Button */}
+                  {versions.length > 0 && displayImage && (
+                    <FloatingShareButton
+                      imageUrl={displayImage}
+                      prompt={currentVersion?.prompt}
+                    />
+                  )}
+
                   {/* Compare Button */}
                   {versions.length > 0 && (
                     <motion.button
@@ -439,6 +498,16 @@ export default function Home() {
                   originalImage={photo}
                   onChange={handleVersionChange}
                 />
+              )}
+
+              {/* Preset Prompts - Above Prompt Input */}
+              {photo && !isGenerating && (
+                <div className="px-4 pb-2">
+                  <PromptPresets
+                    onSelectPreset={handlePresetSelect}
+                    disabled={isGenerating}
+                  />
+                </div>
               )}
 
               {/* Prompt Input - Floating Bottom */}
@@ -522,6 +591,21 @@ export default function Home() {
         onClose={() => setHistoryOpen(false)}
         onSelectPrompt={handlePromptSelect}
       />
+
+      {/* Upgrade Modal */}
+      <UpgradeModal
+        isOpen={upgradeModalOpen}
+        onClose={() => setUpgradeModalOpen(false)}
+        remaining={usageData.remaining}
+        resetsAt={usageData.resetsAt}
+      />
+
+      {/* Usage Indicator - Top Right */}
+      {step === 'photo' && !usageData.isPro && (
+        <div className="fixed top-24 right-4 z-20 bg-white/10 backdrop-blur-sm px-3 py-2 rounded-full text-white/80 text-sm">
+          {usageData.remaining} edits left today
+        </div>
+      )}
     </div>
   );
 }
