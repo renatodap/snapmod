@@ -10,87 +10,96 @@ interface NanaBananaRequest {
 
 export async function POST(req: Request) {
   try {
-    // Rate limiting by IP
-    const ip = req.headers.get('x-forwarded-for') || 'unknown';
-    // TODO: Implement rate limiting with Vercel KV or Edge Config
-
     const { prompt, imageUrl, mode, aspectRatio } = await req.json() as NanaBananaRequest;
 
     // Validate input
-    if (!prompt || prompt.length > 1000) {
+    if (!prompt || prompt.length > 2000) {
       return Response.json({ error: 'Invalid prompt' }, { status: 400 });
     }
 
-    // Build message content
-    const content = mode === 'edit' && imageUrl
-      ? [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: imageUrl } }
-        ]
-      : [{ type: 'text', text: `${prompt}. Aspect ratio: ${aspectRatio || '1:1'}` }];
+    // For image editing, we need the image
+    if (mode === 'edit' && !imageUrl) {
+      return Response.json({ error: 'Image required for edit mode' }, { status: 400 });
+    }
 
-    // Call OpenRouter
+    // Build message content for Gemini
+    const parts: any[] = [];
+
+    // Add the image if in edit mode
+    if (mode === 'edit' && imageUrl) {
+      // Extract base64 data if it's a data URL
+      const base64Data = imageUrl.includes('base64,')
+        ? imageUrl.split('base64,')[1]
+        : imageUrl;
+
+      parts.push({
+        inline_data: {
+          mime_type: 'image/jpeg',
+          data: base64Data
+        }
+      });
+    }
+
+    // Add the prompt
+    parts.push({ text: prompt });
+
+    // Call Gemini via OpenRouter
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.VERCEL_URL || 'https://snapmod.app',
+        'HTTP-Referer': process.env.VERCEL_URL || 'https://snapmod.vercel.app',
         'X-Title': 'SnapMod',
       },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash-image-preview',
         messages: [{
           role: 'user',
-          content
+          content: parts
         }],
-        max_tokens: 1000,
+        max_tokens: 4096,
+        stream: false
       })
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      console.error('OpenRouter error:', error);
+      const errorText = await response.text();
+      console.error('OpenRouter error:', errorText);
       return Response.json({
         error: 'Image generation failed',
-        details: error
+        details: errorText
       }, { status: response.status });
     }
 
     const data = await response.json();
+    console.log('OpenRouter response structure:', JSON.stringify({
+      choices: data.choices?.length,
+      hasContent: !!data.choices?.[0]?.message?.content,
+      contentType: typeof data.choices?.[0]?.message?.content
+    }));
 
-    console.log('OpenRouter response:', JSON.stringify(data, null, 2));
-
-    // Extract image from response
+    // Extract the response content
     const messageContent = data.choices?.[0]?.message?.content;
 
     if (!messageContent) {
       console.error('No content in response:', data);
       return Response.json({
-        error: 'No image returned from API',
-        details: 'Response had no content'
+        error: 'No image returned',
+        details: 'API response contained no content'
       }, { status: 500 });
     }
 
-    // Gemini returns markdown with image URLs or base64
-    // Extract URL from markdown: ![image](url) or just return as is if it's a data URL
+    // Gemini returns base64 image data directly in content
+    // Check if it's already a data URL
     let imageResult = messageContent;
 
-    // Check if it's markdown format
-    const markdownImageMatch = messageContent.match(/!\[.*?\]\((.*?)\)/);
-    if (markdownImageMatch) {
-      imageResult = markdownImageMatch[1];
+    // If it's base64 without data URL prefix, add it
+    if (!imageResult.startsWith('data:') && !imageResult.startsWith('http')) {
+      imageResult = `data:image/png;base64,${imageResult}`;
     }
 
-    // Check if it's a URL or data URL
-    if (!imageResult.startsWith('http') && !imageResult.startsWith('data:')) {
-      // If it's just text, log it and return error
-      console.error('Unexpected response format:', imageResult);
-      return Response.json({
-        error: 'Unexpected response format',
-        details: imageResult
-      }, { status: 500 });
-    }
+    console.log('Image result type:', imageResult.substring(0, 50));
 
     return Response.json({
       success: true,
