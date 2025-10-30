@@ -130,13 +130,41 @@ export async function POST(req: Request) {
     console.log(`[${requestId}] First choice:`, data.choices?.[0]);
     console.log(`[${requestId}] Message object:`, data.choices?.[0]?.message);
 
-    const messageContent = data.choices?.[0]?.message?.content;
+    const message = data.choices?.[0]?.message;
+    const messageContent = message?.content;
+    const messageImages = message?.images;
+
+    console.log(`[${requestId}] Message object:`, message);
     console.log(`[${requestId}] Content type:`, typeof messageContent);
     console.log(`[${requestId}] Content length:`, messageContent?.length || 0);
     console.log(`[${requestId}] Content value:`, messageContent ? messageContent.substring(0, 500) : 'NULL/UNDEFINED');
+    console.log(`[${requestId}] Images array:`, messageImages);
+    console.log(`[${requestId}] Images length:`, messageImages?.length || 0);
 
-    if (!messageContent) {
-      console.error(`[${requestId}] No content in response!`);
+    // Gemini 2.5 Flash Image returns images in the 'images' array, not 'content'
+    let imageResult: string | null = null;
+
+    if (messageImages && messageImages.length > 0) {
+      console.log(`[${requestId}] Found image in images array!`);
+      console.log(`[${requestId}] First image:`, messageImages[0]);
+
+      // The image might be a URL or base64 string
+      const firstImage = messageImages[0];
+
+      if (typeof firstImage === 'string') {
+        imageResult = firstImage;
+      } else if (firstImage?.url) {
+        imageResult = firstImage.url;
+      } else if (firstImage?.b64_json) {
+        imageResult = `data:image/png;base64,${firstImage.b64_json}`;
+      }
+
+      console.log(`[${requestId}] Extracted image result:`, imageResult?.substring(0, 100));
+    } else if (messageContent && messageContent.trim().length > 0) {
+      console.log(`[${requestId}] Found image in content field`);
+      imageResult = messageContent;
+    } else {
+      console.error(`[${requestId}] No image in response!`);
       console.error(`[${requestId}] Full response:`, JSON.stringify(data, null, 2));
 
       // Check if there's an error message from OpenRouter
@@ -147,7 +175,7 @@ export async function POST(req: Request) {
       return Response.json({
         error: 'No image returned',
         userMessage: `AI service error: ${typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg)}. Please check console for details.`,
-        details: 'API response had no content',
+        details: 'API response had no content or images',
         debug: {
           requestId,
           responseKeys: Object.keys(data),
@@ -159,9 +187,6 @@ export async function POST(req: Request) {
         }
       }, { status: 500 });
     }
-
-    // Gemini returns base64 image data
-    let imageResult = messageContent;
 
     // Comprehensive validation to detect text responses
     console.log(`[${requestId}] Validating response content...`);
