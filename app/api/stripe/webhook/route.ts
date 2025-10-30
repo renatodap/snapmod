@@ -8,17 +8,28 @@ import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-10-29.clover',
-});
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is not set');
+  }
+  return new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2025-10-29.clover',
+  });
+}
 
-// Use service role key for admin operations
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabaseAdmin() {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error('Supabase env vars not set');
+  }
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+}
 
 export async function POST(request: Request) {
+  const stripe = getStripe();
+  const supabase = getSupabaseAdmin();
   const body = await request.text();
   const signature = request.headers.get('stripe-signature')!;
 
@@ -44,20 +55,20 @@ export async function POST(request: Request) {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
-        await handleCheckoutCompleted(session);
+        await handleCheckoutCompleted(session, supabase);
         break;
       }
 
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
-        await handleSubscriptionUpdate(subscription);
+        await handleSubscriptionUpdate(subscription, supabase);
         break;
       }
 
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription;
-        await handleSubscriptionDeleted(subscription);
+        await handleSubscriptionDeleted(subscription, supabase);
         break;
       }
 
@@ -75,7 +86,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
+async function handleCheckoutCompleted(session: Stripe.Checkout.Session, supabase: ReturnType<typeof getSupabaseAdmin>) {
   const userId = session.metadata?.supabase_user_id;
 
   if (!userId) {
@@ -104,7 +115,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   }
 }
 
-async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
+async function handleSubscriptionUpdate(subscription: Stripe.Subscription, supabase: ReturnType<typeof getSupabaseAdmin>) {
   const userId = subscription.metadata?.supabase_user_id;
 
   if (!userId) {
@@ -125,23 +136,26 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
 
   const isActive = subscription.status === 'active' || subscription.status === 'trialing';
 
+  // Type assertion for current_period_end which exists at runtime but may not be in all type definitions
+  const subscriptionWithPeriod = subscription as Stripe.Subscription & { current_period_end?: number };
+
   const { error } = await supabase
     .from('profiles')
     .update({
       is_pro: isActive,
       subscription_status: subscription.status,
-      subscription_end_date: subscription.current_period_end
-        ? new Date(subscription.current_period_end * 1000).toISOString()
+      subscription_end_date: subscriptionWithPeriod.current_period_end
+        ? new Date(subscriptionWithPeriod.current_period_end * 1000).toISOString()
         : null,
     })
-    .eq('stripe_subscription_id', subscription.id);
+    .eq('stripe_subscription_id', subscription.id as string);
 
   if (error) {
     console.error('[Webhook] Failed to update subscription:', error);
   }
 }
 
-async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+async function handleSubscriptionDeleted(subscription: Stripe.Subscription, supabase: ReturnType<typeof getSupabaseAdmin>) {
   console.log('[Webhook] Subscription deleted:', subscription.id);
 
   const { error } = await supabase
