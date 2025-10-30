@@ -701,7 +701,7 @@ export default function Home() {
 
               {/* Preset Prompts - Above Prompt Input (only in simple mode) */}
               {photo && !isGenerating && !advancedMode && (
-                <div className="px-4 pb-2">
+                <div className={`px-4 pb-4 ${versions.length > 0 ? 'mb-44' : 'mb-32'}`}>
                   <PromptPresets
                     onSelectPreset={handlePresetSelect}
                     disabled={isGenerating}

@@ -67,7 +67,7 @@ export function VersionTimeline({ versions, currentIndex, originalImage, onChang
       initial={{ y: 100, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 100, opacity: 0 }}
-      className="fixed bottom-20 left-0 right-0 z-30"
+      className="fixed bottom-28 left-0 right-0 z-30"
     >
       <div className="bg-gradient-to-t from-black/90 to-transparent pt-6 pb-4">
         {/* Timeline */}
