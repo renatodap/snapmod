@@ -143,11 +143,20 @@ export async function POST(req: Request) {
       const errorMsg = data.error?.message || data.error || 'Unknown error';
       console.error(`[${requestId}] OpenRouter error:`, errorMsg);
 
+      // Return detailed debugging info to frontend
       return Response.json({
         error: 'No image returned',
-        userMessage: `AI service error: ${errorMsg}. This model may not support image generation. Please try again.`,
+        userMessage: `AI service error: ${typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg)}. Please check console for details.`,
         details: 'API response had no content',
-        fullResponse: data
+        debug: {
+          requestId,
+          responseKeys: Object.keys(data),
+          hasChoices: !!data.choices,
+          choicesLength: data.choices?.length,
+          firstChoice: data.choices?.[0],
+          error: data.error,
+          fullResponse: data
+        }
       }, { status: 500 });
     }
 

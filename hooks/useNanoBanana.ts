@@ -76,6 +76,15 @@ export function useNanoBanana() {
         const errorData = await response.json();
         console.error('[useNanoBanana] Error data:', errorData);
 
+        // Log debug info if available
+        if (errorData.debug) {
+          console.error('[useNanoBanana] 🔍 DEBUG INFO:', errorData.debug);
+          console.error('[useNanaBanana] 🔍 Full OpenRouter Response:', errorData.debug.fullResponse);
+          console.error('[useNanoBanana] 🔍 Response Keys:', errorData.debug.responseKeys);
+          console.error('[useNanoBanana] 🔍 First Choice:', errorData.debug.firstChoice);
+          console.error('[useNanaBanana] 🔍 Error:', errorData.debug.error);
+        }
+
         const errorMessage = errorData.error || 'Generation failed';
         const userMessage = errorData.userMessage || errorMessage;
 
