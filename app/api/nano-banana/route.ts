@@ -65,17 +65,21 @@ export async function POST(req: Request) {
       console.log(`[${requestId}] Image added to content array`);
     }
 
-    // Add text prompt
+    // Add text prompt with explicit instructions to return only image data
+    const enhancedPrompt = `${prompt}
+
+CRITICAL: You MUST return ONLY the base64-encoded image data. Do NOT include any text, explanations, descriptions, or acknowledgments. Return ONLY the raw base64 image string.`;
+
     content.push({
       type: 'text',
-      text: prompt
+      text: enhancedPrompt
     });
-    console.log(`[${requestId}] Text prompt added to content array`);
+    console.log(`[${requestId}] Text prompt added to content array (with image-only instruction)`);
 
     console.log(`[${requestId}] Content array built with ${content.length} items`);
     console.log(`[${requestId}] Sending request to OpenRouter...`);
 
-    // Call OpenRouter
+    // Call OpenRouter with additional safeguards
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -89,7 +93,10 @@ export async function POST(req: Request) {
         messages: [{
           role: 'user',
           content: content
-        }]
+        }],
+        // Additional parameters to encourage image output
+        temperature: 0.7,
+        max_tokens: 4096,  // Ensure enough tokens for image data
       })
     });
 
@@ -135,28 +142,144 @@ export async function POST(req: Request) {
     // Gemini returns base64 image data
     let imageResult = messageContent;
 
-    // If it's not a data URL yet, make it one
+    // Comprehensive validation to detect text responses
+    console.log(`[${requestId}] Validating response content...`);
+
+    // Helper function to check if content is valid base64
+    const isValidBase64 = (str: string): boolean => {
+      // Base64 should only contain A-Z, a-z, 0-9, +, /, and = for padding
+      const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+      return base64Regex.test(str);
+    };
+
+    // Helper function to detect if content is text
+    const isTextResponse = (str: string): boolean => {
+      // Common text indicators
+      const textIndicators = [
+        /^(here|absolutely|sure|certainly|of course)/i,
+        /\b(image|photo|picture|transformed|applied|filter)\b/i,
+        /(\.|\!|\?)(\s|$)/,  // Sentences ending with punctuation
+        /\s{2,}/,  // Multiple spaces (common in text)
+        /\n/,  // Newlines in sentences
+      ];
+
+      // If it matches common text patterns, it's likely text
+      for (const pattern of textIndicators) {
+        if (pattern.test(str)) {
+          console.log(`[${requestId}] Text indicator matched:`, pattern);
+          return true;
+        }
+      }
+
+      // If it has lots of spaces, it's likely text (base64 has no spaces)
+      const spaceRatio = (str.match(/ /g) || []).length / str.length;
+      if (spaceRatio > 0.05) {
+        console.log(`[${requestId}] High space ratio detected:`, spaceRatio);
+        return true;
+      }
+
+      // If it's relatively short and contains common words
+      if (str.length < 500 && /\b(the|is|are|was|were|your|here)\b/i.test(str)) {
+        console.log(`[${requestId}] Short text with common words detected`);
+        return true;
+      }
+
+      return false;
+    };
+
+    // If it's not a data URL yet, validate and convert
     if (!imageResult.startsWith('data:')) {
       console.log(`[${requestId}] Content is not a data URL, checking format...`);
+      console.log(`[${requestId}] First 200 chars:`, imageResult.substring(0, 200));
 
-      // Check if it's just base64 or has some text
-      if (imageResult.length > 1000 && !imageResult.includes(' ')) {
-        // Likely base64
-        console.log(`[${requestId}] Detected base64 data, converting to data URL`);
-        imageResult = `data:image/png;base64,${imageResult}`;
-      } else {
-        // It's text, not an image
-        console.error(`[${requestId}] Got text response instead of image:`, imageResult.substring(0, 200));
+      // First check: Is this clearly text?
+      if (isTextResponse(imageResult)) {
+        console.error(`[${requestId}] DETECTED TEXT RESPONSE:`, imageResult.substring(0, 300));
         return Response.json({
           error: 'API returned text instead of image',
-          userMessage: 'AI responded with text instead of an image. Try selecting different filters.',
-          details: 'Try a different filter or simpler prompt'
+          userMessage: 'The AI responded with text instead of generating an image. This might mean the prompt was unclear. Please try again with different filters or a different photo.',
+          details: imageResult.substring(0, 200),
+          hint: 'Try using fewer filters or a clearer photo'
         }, { status: 500 });
       }
+
+      // Second check: Does it look like valid base64?
+      const trimmed = imageResult.trim();
+      if (!isValidBase64(trimmed)) {
+        console.error(`[${requestId}] INVALID BASE64 FORMAT:`, imageResult.substring(0, 200));
+        return Response.json({
+          error: 'Invalid response format',
+          userMessage: 'Received an invalid response from the AI. Please try again.',
+          details: 'Response is neither text nor valid base64'
+        }, { status: 500 });
+      }
+
+      // Third check: Is it long enough to be an image?
+      // Even a tiny 1x1 PNG is ~100 bytes in base64, realistic images are 10KB+
+      if (trimmed.length < 1000) {
+        console.error(`[${requestId}] RESPONSE TOO SHORT for image:`, trimmed.length, 'chars');
+        console.error(`[${requestId}] Content:`, imageResult);
+        return Response.json({
+          error: 'Response too short to be an image',
+          userMessage: 'The AI response was incomplete. Please try again.',
+          details: `Only ${trimmed.length} characters received`
+        }, { status: 500 });
+      }
+
+      // If all checks pass, it's likely valid base64 image data
+      console.log(`[${requestId}] Valid base64 detected (${trimmed.length} chars), converting to data URL`);
+      imageResult = `data:image/png;base64,${trimmed}`;
+    } else {
+      console.log(`[${requestId}] Already a data URL`);
     }
 
-    console.log(`[${requestId}] Image processed successfully. Data URL prefix:`, imageResult.substring(0, 50));
+    // Final validation: Verify data URL format
+    if (!imageResult.match(/^data:image\/(png|jpeg|jpg|webp);base64,/)) {
+      console.error(`[${requestId}] INVALID DATA URL FORMAT:`, imageResult.substring(0, 100));
+      return Response.json({
+        error: 'Invalid image format',
+        userMessage: 'The image format is not supported. Please try again.',
+        details: 'Data URL does not match expected format'
+      }, { status: 500 });
+    }
+
+    console.log(`[${requestId}] Image validated successfully!`);
+    console.log(`[${requestId}] Data URL prefix:`, imageResult.substring(0, 50));
     console.log(`[${requestId}] Total image data size: ${imageResult.length} characters`);
+
+    // Final sanity check: Verify the base64 portion is actually valid
+    try {
+      const base64Part = imageResult.split(',')[1];
+      if (!base64Part) {
+        throw new Error('No base64 data after comma');
+      }
+
+      // Try to decode a small portion to verify it's valid base64
+      const testDecode = atob(base64Part.substring(0, 100));
+      console.log(`[${requestId}] Base64 decode test successful (first 100 chars decoded to ${testDecode.length} bytes)`);
+
+      // Check for PNG or JPEG magic numbers in decoded data
+      const firstBytes = testDecode.substring(0, 4);
+      const isPNG = firstBytes.charCodeAt(0) === 0x89 && firstBytes.charCodeAt(1) === 0x50;
+      const isJPEG = firstBytes.charCodeAt(0) === 0xFF && firstBytes.charCodeAt(1) === 0xD8;
+
+      if (!isPNG && !isJPEG) {
+        console.warn(`[${requestId}] Warning: Data doesn't start with PNG or JPEG signature`);
+        console.warn(`[${requestId}] First bytes:`, Array.from(firstBytes).map(c => c.charCodeAt(0).toString(16)));
+        // Continue anyway - might be WebP or other format
+      } else {
+        console.log(`[${requestId}] Image format verified: ${isPNG ? 'PNG' : 'JPEG'}`);
+      }
+    } catch (decodeError) {
+      console.error(`[${requestId}] FAILED to decode base64:`, decodeError);
+      return Response.json({
+        error: 'Invalid base64 image data',
+        userMessage: 'The AI returned invalid image data. Please try again with different filters.',
+        details: decodeError instanceof Error ? decodeError.message : 'Base64 decode failed'
+      }, { status: 500 });
+    }
+
+    console.log(`[${requestId}] All validations passed! Returning image.`);
 
     return Response.json({
       success: true,
