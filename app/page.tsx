@@ -67,7 +67,9 @@ export default function Home() {
   // CSS filter string for preview
   const filterCSS = useMemo(() => {
     if (editMode === 'filters' && displayImage) {
-      return convertFilterStateToCSS(filterState);
+      const cssFilter = convertFilterStateToCSS(filterState);
+      console.log('[Filters] Applying CSS filter:', cssFilter);
+      return cssFilter;
     }
     return '';
   }, [editMode, filterState, displayImage]);
@@ -639,7 +641,7 @@ export default function Home() {
                 )}
 
                 {/* Header Overlay */}
-                <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-4">
+                <div className="absolute top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/80 to-transparent p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
@@ -731,7 +733,7 @@ export default function Home() {
                 </div>
 
                 {/* Floating Action Buttons */}
-                <div className="absolute right-4 bottom-32 flex flex-col gap-3">
+                <div className="absolute right-4 bottom-32 z-30 flex flex-col gap-3 pr-safe pb-safe">
                   {/* Export Button */}
                   {displayImage && (
                     <motion.button
