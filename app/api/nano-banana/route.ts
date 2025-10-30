@@ -159,8 +159,11 @@ export async function POST(req: Request) {
       } else if (typeof firstImage === 'object' && firstImage !== null) {
         console.log(`[${requestId}] Image is an object, keys:`, Object.keys(firstImage));
 
-        // Try various possible properties
-        if (firstImage.url) {
+        // Try various possible properties - OpenRouter format has nested image_url.url
+        if (firstImage.image_url && firstImage.image_url.url) {
+          console.log(`[${requestId}] Found .image_url.url property (OpenRouter format)`);
+          imageResult = firstImage.image_url.url;
+        } else if (firstImage.url) {
           console.log(`[${requestId}] Found .url property`);
           imageResult = firstImage.url;
         } else if (firstImage.b64_json) {
