@@ -1,18 +1,53 @@
 'use client';
 
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Sparkles, Check, Zap } from 'lucide-react';
 import { formatTimeUntilReset } from '@/lib/usage-limits';
+import { useAuth } from '@/components/providers/AuthProvider';
 
 interface UpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
   remaining: number;
   resetsAt: Date;
+  onSignInClick?: () => void;
 }
 
-export function UpgradeModal({ isOpen, onClose, remaining, resetsAt }: UpgradeModalProps) {
+export function UpgradeModal({ isOpen, onClose, remaining, resetsAt, onSignInClick }: UpgradeModalProps) {
+  const { user } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
   const timeUntilReset = formatTimeUntilReset(resetsAt);
+
+  const handleUpgrade = async () => {
+    // If not authenticated, prompt to sign in first
+    if (!user) {
+      onSignInClick?.();
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Call our API to create Stripe checkout session
+      const response = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create checkout session');
+      }
+
+      const { url } = await response.json();
+
+      // Redirect to Stripe checkout
+      window.location.href = url;
+    } catch (error) {
+      console.error('[Upgrade] Error:', error);
+      alert('Failed to start checkout. Please try again.');
+      setIsLoading(false);
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -114,13 +149,20 @@ export function UpgradeModal({ isOpen, onClose, remaining, resetsAt }: UpgradeMo
 
                   {/* CTA Button */}
                   <button
-                    onClick={() => {
-                      // TODO: Implement Stripe checkout
-                      alert('Stripe integration coming soon! For now, DM @renatodap on Twitter for early access.');
-                    }}
-                    className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold py-3 rounded-xl hover:shadow-lg hover:shadow-blue-500/50 transition active:scale-95"
+                    onClick={handleUpgrade}
+                    disabled={isLoading}
+                    className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold py-3 rounded-xl hover:shadow-lg hover:shadow-blue-500/50 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    Upgrade to Pro
+                    {isLoading ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Loading...
+                      </>
+                    ) : user ? (
+                      'Upgrade to Pro'
+                    ) : (
+                      'Sign In to Upgrade'
+                    )}
                   </button>
 
                   <p className="text-xs text-white/40 text-center mt-2">

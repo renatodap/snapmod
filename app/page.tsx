@@ -19,12 +19,18 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { compressImage, downloadImage, getImageDimensions } from '@/lib/image-utils';
 import { versionStorage, type Version } from '@/lib/version-storage';
 import { promptHistory } from '@/lib/prompt-history';
-import { checkUsageLimit, incrementUsageCount } from '@/lib/usage-limits';
+import { checkUsageLimit as checkUsageLimitSupabase, incrementUsageCount as incrementUsageCountSupabase } from '@/lib/usage-limits-supabase';
 import { track, trackImageUpload, trackEditStart, trackEditComplete, trackEditFailed, trackPresetUsed, trackDownload, trackVersionChange, trackComparisonView, trackHistoryOpened } from '@/lib/analytics';
+import { useAuth } from '@/components/providers/AuthProvider';
+import { SignInModal } from '@/components/auth/SignInModal';
 
 type Step = 'start' | 'photo' | 'processing' | 'result';
 
 export default function Home() {
+  // Auth
+  const { user, isPro, isLoading: authLoading } = useAuth();
+
+  // State
   const [step, setStep] = useState<Step>('start');
   const [photo, setPhoto] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<string>('');
@@ -35,7 +41,8 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-  const [usageData, setUsageData] = useState(() => checkUsageLimit());
+  const [showSignInModal, setShowSignInModal] = useState(false);
+  const [usageData, setUsageData] = useState<any>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [showCustomPresets, setShowCustomPresets] = useState(false);
@@ -50,6 +57,17 @@ export default function Home() {
 
   const currentVersion = versions[currentVersionIndex];
   const displayImage = currentVersion?.image || photo;
+
+  // Load usage data (with auth support)
+  useEffect(() => {
+    const loadUsage = async () => {
+      const usage = await checkUsageLimitSupabase(user?.id, isPro);
+      setUsageData(usage);
+    };
+    if (!authLoading) {
+      loadUsage();
+    }
+  }, [user, isPro, authLoading]);
 
   // Get image dimensions when displayImage changes
   useEffect(() => {
@@ -185,8 +203,8 @@ export default function Home() {
       return;
     }
 
-    // Check usage limits
-    const usage = checkUsageLimit();
+    // Check usage limits (with auth support)
+    const usage = await checkUsageLimitSupabase(user?.id, isPro);
     if (!usage.allowed) {
       console.log('[Submit] Usage limit reached, showing upgrade modal');
       setUpgradeModalOpen(true);
@@ -232,9 +250,10 @@ export default function Home() {
         const duration = Date.now() - startTime;
         trackEditComplete(prompt.trim(), duration, result.cached || false);
 
-        // Increment usage count
-        incrementUsageCount();
-        setUsageData(checkUsageLimit());
+        // Increment usage count (with auth support)
+        await incrementUsageCountSupabase(user?.id);
+        const updatedUsage = await checkUsageLimitSupabase(user?.id, isPro);
+        setUsageData(updatedUsage);
 
         // Create new version
         const newVersion: Version = {
@@ -511,6 +530,24 @@ export default function Home() {
                         <Save className="w-5 h-5" />
                         <span className="text-sm hidden sm:inline">Presets</span>
                       </button>
+                      {!user ? (
+                        <button
+                          onClick={() => setShowSignInModal(true)}
+                          className="text-white/60 hover:text-white transition p-2 flex items-center gap-1"
+                          aria-label="Sign In"
+                        >
+                          <span className="text-sm">Sign In</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {/* We'll add sign out later */}}
+                          className="text-green-400 transition p-2 flex items-center gap-1"
+                          aria-label="Signed In"
+                          title={user.email || 'Signed in'}
+                        >
+                          <span className="text-sm">●</span>
+                        </button>
+                      )}
                       <button
                         onClick={reset}
                         className="text-white/60 hover:text-white transition p-2"
@@ -698,12 +735,18 @@ export default function Home() {
       />
 
       {/* Upgrade Modal */}
-      <UpgradeModal
-        isOpen={upgradeModalOpen}
-        onClose={() => setUpgradeModalOpen(false)}
-        remaining={usageData.remaining}
-        resetsAt={usageData.resetsAt}
-      />
+      {usageData && (
+        <UpgradeModal
+          isOpen={upgradeModalOpen}
+          onClose={() => setUpgradeModalOpen(false)}
+          remaining={usageData.remaining}
+          resetsAt={usageData.resetsAt}
+          onSignInClick={() => {
+            setUpgradeModalOpen(false);
+            setShowSignInModal(true);
+          }}
+        />
+      )}
 
       {/* Export Modal */}
       <AnimatePresence>
@@ -732,8 +775,14 @@ export default function Home() {
         )}
       </AnimatePresence>
 
+      {/* Sign In Modal */}
+      <SignInModal
+        isOpen={showSignInModal}
+        onClose={() => setShowSignInModal(false)}
+      />
+
       {/* Usage Indicator - Top Right */}
-      {step === 'photo' && !usageData.isPro && (
+      {step === 'photo' && usageData && !usageData.isPro && (
         <div className="fixed top-24 right-4 z-20 bg-white/10 backdrop-blur-sm px-3 py-2 rounded-full text-white/80 text-sm">
           {usageData.remaining} edits left today
         </div>
