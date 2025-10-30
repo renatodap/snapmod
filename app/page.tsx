@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Camera, Upload, Sparkles, Download, X, Maximize2, History as HistoryIcon, Save, Sliders } from 'lucide-react';
 import { PromptInput } from '@/components/editor/PromptInput';
@@ -23,6 +23,9 @@ import { checkUsageLimit as checkUsageLimitSupabase, incrementUsageCount as incr
 import { track, trackImageUpload, trackEditStart, trackEditComplete, trackEditFailed, trackPresetUsed, trackDownload, trackVersionChange, trackComparisonView, trackHistoryOpened } from '@/lib/analytics';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { SignInModal } from '@/components/auth/SignInModal';
+import { FilterPanel } from '@/components/editor/FilterPanel';
+import { convertFilterStateToCSS, applyFiltersToCanvas, hasActiveFilters } from '@/lib/image-filters';
+import { DEFAULT_FILTERS, type FilterState } from '@/lib/types/filters';
 
 type Step = 'start' | 'photo' | 'processing' | 'result';
 
@@ -51,12 +54,23 @@ export default function Home() {
     basePrompt: '',
     modifiers: [],
   });
+  const [editMode, setEditMode] = useState<'ai' | 'filters'>('ai');
+  const [filterState, setFilterState] = useState<FilterState>(DEFAULT_FILTERS);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { generate, isGenerating, progress, error } = useNanoBanana();
 
   const currentVersion = versions[currentVersionIndex];
   const displayImage = currentVersion?.image || photo;
+
+  // CSS filter string for preview
+  const filterCSS = useMemo(() => {
+    if (editMode === 'filters' && displayImage) {
+      return convertFilterStateToCSS(filterState);
+    }
+    return '';
+  }, [editMode, filterState, displayImage]);
 
   // Load usage data (with auth support)
   useEffect(() => {
@@ -187,6 +201,76 @@ export default function Home() {
     }
   };
 
+  // Save filtered version (no AI, unlimited)
+  const handleSaveFilterVersion = async () => {
+    if (!displayImage) return;
+
+    console.log('[Filters] Saving filter version');
+
+    try {
+      // Apply filters via Canvas for high quality
+      const filteredImage = await applyFiltersToCanvas(displayImage, filterState);
+
+      // Create new version (not AI-generated = unlimited)
+      const newVersion: Version = {
+        id: `version_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        image: filteredImage,
+        filterState,
+        timestamp: Date.now(),
+        sessionId,
+        isAiGenerated: false,  // Manual filter = no usage count
+      };
+
+      // Save to IndexedDB
+      try {
+        await versionStorage.save(newVersion);
+        console.log('[Filters] Version saved to storage');
+      } catch (storageError) {
+        console.error('[Filters] Failed to save version:', storageError);
+      }
+
+      // Add to versions array
+      const newVersions = [...versions, newVersion];
+      setVersions(newVersions);
+      setCurrentVersionIndex(newVersions.length - 1);
+
+      console.log('[Filters] Filter version saved successfully');
+
+      // Reset filters and close panel
+      setFilterState(DEFAULT_FILTERS);
+      setShowFilterPanel(false);
+      setEditMode('ai');
+    } catch (error) {
+      console.error('[Filters] Save failed:', error);
+      alert('Failed to save filtered version. Please try again.');
+    }
+  };
+
+  // Use filtered image as base for AI edit
+  const handleUseFilteredForAI = async () => {
+    if (!displayImage) return;
+
+    console.log('[Filters] Using filtered image for AI edit');
+
+    try {
+      // Apply filters first
+      const filteredImage = await applyFiltersToCanvas(displayImage, filterState);
+
+      // Set as current photo for AI editing
+      setPhoto(filteredImage);
+
+      // Reset filters and switch to AI mode
+      setFilterState(DEFAULT_FILTERS);
+      setShowFilterPanel(false);
+      setEditMode('ai');
+
+      console.log('[Filters] Switched to AI mode with filtered image');
+    } catch (error) {
+      console.error('[Filters] Apply failed:', error);
+      alert('Failed to apply filters. Please try again.');
+    }
+  };
+
   // Submit for processing
   const handleSubmit = async () => {
     console.log('[Submit] User clicked submit');
@@ -250,8 +334,8 @@ export default function Home() {
         const duration = Date.now() - startTime;
         trackEditComplete(prompt.trim(), duration, result.cached || false);
 
-        // Increment usage count (with auth support)
-        await incrementUsageCountSupabase(user?.id);
+        // Increment usage count (with auth support) - AI edit counts toward limit
+        await incrementUsageCountSupabase(user?.id, true);
         const updatedUsage = await checkUsageLimitSupabase(user?.id, isPro);
         setUsageData(updatedUsage);
 
@@ -261,7 +345,8 @@ export default function Home() {
           prompt: prompt.trim(),
           image: result.image,
           timestamp: Date.now(),
-          sessionId
+          sessionId,
+          isAiGenerated: true,  // AI edit = counts toward usage
         };
 
         // Save to IndexedDB
@@ -544,6 +629,12 @@ export default function Home() {
                     src={displayImage}
                     alt="Your photo"
                     className="max-w-full max-h-full object-contain"
+                    style={{
+                      filter: filterCSS,
+                      transition: 'filter 0.1s ease-out',
+                      transform: 'translateZ(0)', // Force GPU acceleration
+                      willChange: editMode === 'filters' ? 'filter' : 'auto',
+                    }}
                   />
                 )}
 
@@ -699,8 +790,42 @@ export default function Home() {
                 />
               )}
 
-              {/* Preset Prompts - Above Prompt Input (only in simple mode) */}
+              {/* Mode Toggle - AI Edit or Filters */}
               {photo && !isGenerating && !advancedMode && (
+                <div className="px-4 pb-3">
+                  <div className="flex gap-2 bg-white/5 p-1 rounded-xl">
+                    <button
+                      onClick={() => {
+                        setEditMode('ai');
+                        setShowFilterPanel(false);
+                      }}
+                      className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition ${
+                        editMode === 'ai'
+                          ? 'bg-white/10 text-white'
+                          : 'text-white/60 hover:text-white'
+                      }`}
+                    >
+                      🤖 AI Edit
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditMode('filters');
+                        setShowFilterPanel(true);
+                      }}
+                      className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition ${
+                        editMode === 'filters'
+                          ? 'bg-white/10 text-white'
+                          : 'text-white/60 hover:text-white'
+                      }`}
+                    >
+                      🎨 Filters
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Preset Prompts - Above Prompt Input (only in AI mode) */}
+              {photo && !isGenerating && !advancedMode && editMode === 'ai' && (
                 <div className={`px-4 pb-4 ${versions.length > 0 ? 'mb-44' : 'mb-32'}`}>
                   <PromptPresets
                     onSelectPreset={handlePresetSelect}
@@ -709,26 +834,41 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Prompt Input or Advanced Builder */}
-              {!advancedMode ? (
-                <PromptInput
-                  value={prompt}
-                  onChange={setPrompt}
-                  onSubmit={handleSubmit}
-                  onFocusChange={setIsInputFocused}
-                  disabled={isGenerating}
-                />
-              ) : (
-                <div className="bg-gradient-to-t from-black via-black/95 to-transparent p-4 pb-safe">
-                  <div className="max-w-2xl mx-auto">
-                    <PromptBuilder
-                      value={composedPrompt}
-                      onChange={setComposedPrompt}
-                      onGenerate={handleAdvancedGenerate}
+              {/* Prompt Input or Advanced Builder (only in AI mode) */}
+              {editMode === 'ai' && (
+                <>
+                  {!advancedMode ? (
+                    <PromptInput
+                      value={prompt}
+                      onChange={setPrompt}
+                      onSubmit={handleSubmit}
+                      onFocusChange={setIsInputFocused}
                       disabled={isGenerating}
                     />
-                  </div>
-                </div>
+                  ) : (
+                    <div className="bg-gradient-to-t from-black via-black/95 to-transparent p-4 pb-safe">
+                      <div className="max-w-2xl mx-auto">
+                        <PromptBuilder
+                          value={composedPrompt}
+                          onChange={setComposedPrompt}
+                          onGenerate={handleAdvancedGenerate}
+                          disabled={isGenerating}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Filter Panel (in filters mode) */}
+              {editMode === 'filters' && showFilterPanel && (
+                <FilterPanel
+                  filters={filterState}
+                  onFiltersChange={setFilterState}
+                  onSaveVersion={handleSaveFilterVersion}
+                  onUseForAI={handleUseFilteredForAI}
+                  disabled={isGenerating}
+                />
               )}
             </motion.div>
           )}

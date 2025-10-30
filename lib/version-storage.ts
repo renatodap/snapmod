@@ -8,17 +8,21 @@
  * - Error handling and logging
  */
 
+import type { FilterState } from './types/filters';
+
 const DB_NAME = 'snapmod-versions';
 const STORE_NAME = 'versions';
 const DB_VERSION = 1;
 const MAX_VERSIONS = 50;
 
 export interface Version {
-  id: string;              // UUID
-  prompt: string;          // Prompt used to generate
-  image: string;           // Base64 data URL
-  timestamp: number;       // Date.now()
-  sessionId: string;       // Group by photo session
+  id: string;                    // UUID
+  prompt?: string;               // Prompt used (for AI edits)
+  image: string;                 // Base64 data URL
+  timestamp: number;             // Date.now()
+  sessionId: string;             // Group by photo session
+  filterState?: FilterState;     // Filter values (for manual edits)
+  isAiGenerated: boolean;        // True = AI edit, False = manual filter
 }
 
 class VersionStorage {
@@ -68,8 +72,9 @@ class VersionStorage {
     console.log('[VersionStorage] Saving version:', {
       id: version.id,
       sessionId: version.sessionId,
-      promptLength: version.prompt.length,
-      imageSize: version.image.length
+      promptLength: version.prompt?.length || 0,
+      imageSize: version.image.length,
+      isAiGenerated: version.isAiGenerated
     });
 
     return new Promise((resolve, reject) => {

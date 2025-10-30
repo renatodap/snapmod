@@ -159,8 +159,18 @@ function checkGuestUsage(): UsageCheckResult {
 
 /**
  * Increment usage count after successful edit
+ *
+ * @param userId - User ID (if authenticated)
+ * @param isAiGenerated - True for AI edits (counts toward limit), False for manual filters (unlimited)
  */
-export async function incrementUsageCount(userId?: string | null): Promise<void> {
+export async function incrementUsageCount(userId?: string | null, isAiGenerated: boolean = true): Promise<void> {
+  // Skip usage tracking for manual filter edits (unlimited)
+  if (!isAiGenerated) {
+    console.log('[UsageLimits] Manual filter edit - unlimited, not counting toward usage');
+    return;
+  }
+
+  console.log('[UsageLimits] Incrementing AI usage count for user:', userId || 'guest');
   if (userId) {
     // Authenticated user - log to Supabase
     try {
