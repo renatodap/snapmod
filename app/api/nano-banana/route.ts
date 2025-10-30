@@ -65,21 +65,28 @@ export async function POST(req: Request) {
       console.log(`[${requestId}] Image added to content array`);
     }
 
-    // Add text prompt with explicit instructions to return only image data
-    const enhancedPrompt = `${prompt}
-
-CRITICAL: You MUST return ONLY the base64-encoded image data. Do NOT include any text, explanations, descriptions, or acknowledgments. Return ONLY the raw base64 image string.`;
-
+    // Add text prompt - simpler for image generation models
     content.push({
       type: 'text',
-      text: enhancedPrompt
+      text: prompt
     });
-    console.log(`[${requestId}] Text prompt added to content array (with image-only instruction)`);
+    console.log(`[${requestId}] Text prompt added to content array`);
 
     console.log(`[${requestId}] Content array built with ${content.length} items`);
+    console.log(`[${requestId}] Final content structure:`, JSON.stringify(content, null, 2).substring(0, 1000));
     console.log(`[${requestId}] Sending request to OpenRouter...`);
 
-    // Call OpenRouter with additional safeguards
+    const requestBody = {
+      model: 'google/gemini-2.5-flash-image-preview',
+      messages: [{
+        role: 'user',
+        content: content
+      }]
+    };
+
+    console.log(`[${requestId}] Request body:`, JSON.stringify(requestBody, null, 2).substring(0, 1000));
+
+    // Call OpenRouter
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -88,16 +95,7 @@ CRITICAL: You MUST return ONLY the base64-encoded image data. Do NOT include any
         'HTTP-Referer': process.env.VERCEL_URL || 'https://snapmod.vercel.app',
         'X-Title': 'SnapMod',
       },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-image-preview',
-        messages: [{
-          role: 'user',
-          content: content
-        }],
-        // Additional parameters to encourage image output
-        temperature: 0.7,
-        max_tokens: 4096,  // Ensure enough tokens for image data
-      })
+      body: JSON.stringify(requestBody)
     });
 
     console.log(`[${requestId}] OpenRouter response status: ${response.status}`);
@@ -124,18 +122,32 @@ CRITICAL: You MUST return ONLY the base64-encoded image data. Do NOT include any
 
     console.log(`[${requestId}] Parsing OpenRouter response...`);
     const data = await response.json();
-    console.log(`[${requestId}] Response parsed. Checking for content...`);
+    console.log(`[${requestId}] Response parsed. Full response structure:`, JSON.stringify(data, null, 2));
+
+    // Log the entire response structure for debugging
+    console.log(`[${requestId}] Response keys:`, Object.keys(data));
+    console.log(`[${requestId}] Choices array:`, data.choices);
+    console.log(`[${requestId}] First choice:`, data.choices?.[0]);
+    console.log(`[${requestId}] Message object:`, data.choices?.[0]?.message);
 
     const messageContent = data.choices?.[0]?.message?.content;
     console.log(`[${requestId}] Content type:`, typeof messageContent);
     console.log(`[${requestId}] Content length:`, messageContent?.length || 0);
+    console.log(`[${requestId}] Content value:`, messageContent ? messageContent.substring(0, 500) : 'NULL/UNDEFINED');
 
     if (!messageContent) {
-      console.error(`[${requestId}] No content in response. Full data:`, JSON.stringify(data).substring(0, 500));
+      console.error(`[${requestId}] No content in response!`);
+      console.error(`[${requestId}] Full response:`, JSON.stringify(data, null, 2));
+
+      // Check if there's an error message from OpenRouter
+      const errorMsg = data.error?.message || data.error || 'Unknown error';
+      console.error(`[${requestId}] OpenRouter error:`, errorMsg);
+
       return Response.json({
         error: 'No image returned',
-        userMessage: 'AI did not return an image. Please try again with a different filter.',
-        details: 'API response had no content'
+        userMessage: `AI service error: ${errorMsg}. This model may not support image generation. Please try again.`,
+        details: 'API response had no content',
+        fullResponse: data
       }, { status: 500 });
     }
 
