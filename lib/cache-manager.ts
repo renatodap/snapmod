@@ -14,20 +14,28 @@ class CacheManager {
   private db: IDBDatabase | null = null;
 
   async init(): Promise<void> {
+    console.log('[CacheManager] Initializing IndexedDB...');
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => {
+        console.error('[CacheManager] Failed to open database:', request.error);
+        reject(request.error);
+      };
       request.onsuccess = () => {
         this.db = request.result;
+        console.log('[CacheManager] Database opened successfully');
         resolve();
       };
 
       request.onupgradeneeded = (event) => {
+        console.log('[CacheManager] Database upgrade needed');
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(STORE_NAME)) {
+          console.log('[CacheManager] Creating object store:', STORE_NAME);
           const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
           store.createIndex('timestamp', 'timestamp', { unique: false });
+          console.log('[CacheManager] Object store created');
         }
       };
     });
@@ -36,6 +44,7 @@ class CacheManager {
   async get(key: string): Promise<string | null> {
     if (!this.db) await this.init();
 
+    console.log('[CacheManager] Getting cached image for key:', key.substring(0, 100));
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction([STORE_NAME], 'readonly');
       const store = transaction.objectStore(STORE_NAME);
@@ -43,17 +52,28 @@ class CacheManager {
 
       request.onsuccess = () => {
         const result = request.result as CachedImage | undefined;
+        if (result) {
+          console.log('[CacheManager] Cache hit! Image size:', result.size, 'Age:', Date.now() - result.timestamp, 'ms');
+        } else {
+          console.log('[CacheManager] Cache miss');
+        }
         resolve(result?.image || null);
       };
-      request.onerror = () => reject(request.error);
+      request.onerror = () => {
+        console.error('[CacheManager] Error getting from cache:', request.error);
+        reject(request.error);
+      };
     });
   }
 
   async set(key: string, image: string): Promise<void> {
     if (!this.db) await this.init();
 
+    console.log('[CacheManager] Caching image for key:', key.substring(0, 100));
+
     // Estimate size (rough approximation)
     const size = new Blob([image]).size;
+    console.log('[CacheManager] Image size:', size, 'bytes');
 
     const cachedImage: CachedImage = {
       key,
@@ -70,8 +90,14 @@ class CacheManager {
       this.cleanupOldEntries(store);
 
       const request = store.put(cachedImage);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        console.log('[CacheManager] Image cached successfully');
+        resolve();
+      };
+      request.onerror = () => {
+        console.error('[CacheManager] Error caching image:', request.error);
+        reject(request.error);
+      };
     });
   }
 
@@ -79,18 +105,26 @@ class CacheManager {
     const countRequest = store.count();
 
     countRequest.onsuccess = () => {
-      if (countRequest.result >= MAX_CACHE_SIZE) {
+      const cacheCount = countRequest.result;
+      console.log('[CacheManager] Current cache size:', cacheCount, '/', MAX_CACHE_SIZE);
+
+      if (cacheCount >= MAX_CACHE_SIZE) {
+        console.log('[CacheManager] Cache full, cleaning up old entries...');
         const index = store.index('timestamp');
         const cursorRequest = index.openCursor();
 
-        let deleteCount = countRequest.result - MAX_CACHE_SIZE + 10; // Delete extra
+        let deleteCount = cacheCount - MAX_CACHE_SIZE + 10; // Delete extra
+        console.log('[CacheManager] Will delete', deleteCount, 'old entries');
 
         cursorRequest.onsuccess = (event) => {
           const cursor = (event.target as IDBRequest).result;
           if (cursor && deleteCount > 0) {
+            console.log('[CacheManager] Deleting old entry:', cursor.primaryKey);
             store.delete(cursor.primaryKey);
             deleteCount--;
             cursor.continue();
+          } else {
+            console.log('[CacheManager] Cleanup complete');
           }
         };
       }

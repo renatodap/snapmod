@@ -26,87 +26,178 @@ export default function Home() {
 
   // Handle camera
   const handleCamera = async () => {
+    console.log('[Camera] User clicked camera button');
     try {
+      console.log('[Camera] Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' }
       });
+      console.log('[Camera] Camera access granted');
 
       const video = document.createElement('video');
       video.srcObject = stream;
       video.play();
+      console.log('[Camera] Video element created and playing');
 
       await new Promise(resolve => {
         video.onloadedmetadata = resolve;
       });
+      console.log('[Camera] Video metadata loaded');
 
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
+      console.log('[Camera] Canvas created:', { width: canvas.width, height: canvas.height });
+
       canvas.getContext('2d')?.drawImage(video, 0, 0);
+      console.log('[Camera] Image drawn to canvas');
 
       const imageData = canvas.toDataURL('image/jpeg', 0.9);
+      console.log('[Camera] Image data created, size:', imageData.length);
+
       setPhoto(imageData);
       setStep('photo');
+      console.log('[Camera] Photo set, moving to photo step');
 
       stream.getTracks().forEach(track => track.stop());
+      console.log('[Camera] Camera stream stopped');
     } catch (err) {
-      console.error('Camera error:', err);
-      alert('Camera access denied');
+      console.error('[Camera] Error:', err);
+      console.error('[Camera] Error name:', err instanceof Error ? err.name : 'unknown');
+      console.error('[Camera] Error message:', err instanceof Error ? err.message : String(err));
+
+      let errorMessage = 'Failed to access camera. Please check permissions.';
+      if (err instanceof Error) {
+        if (err.name === 'NotAllowedError') {
+          errorMessage = 'Camera access denied. Please allow camera access in your browser settings.';
+        } else if (err.name === 'NotFoundError') {
+          errorMessage = 'No camera found on this device.';
+        } else if (err.name === 'NotReadableError') {
+          errorMessage = 'Camera is already in use by another application.';
+        }
+      }
+
+      alert(errorMessage);
     }
   };
 
   // Handle upload
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('[Upload] File input changed');
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.log('[Upload] No file selected');
+      return;
+    }
+
+    console.log('[Upload] File selected:', {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
 
     try {
+      console.log('[Upload] Compressing image...');
       const compressed = await compressImage(file);
+      console.log('[Upload] Image compressed, size:', compressed.length);
+
       setPhoto(compressed);
       setStep('photo');
+      console.log('[Upload] Photo set, moving to photo step');
     } catch (err) {
-      console.error('Upload error:', err);
+      console.error('[Upload] Error:', err);
+      console.error('[Upload] Error details:', err instanceof Error ? err.message : String(err));
+
+      let errorMessage = 'Failed to upload image. Please try a different file.';
+      if (err instanceof Error) {
+        if (err.message.includes('size')) {
+          errorMessage = 'Image is too large. Please choose a smaller file.';
+        } else if (err.message.includes('type') || err.message.includes('format')) {
+          errorMessage = 'Unsupported file type. Please upload a JPG or PNG image.';
+        }
+      }
+
+      alert(errorMessage);
     }
   };
 
   // Toggle filter
   const toggleFilter = (filter: FilterPreset) => {
+    console.log('[Filter] Toggling filter:', filter.name);
     setSelectedFilters(prev => {
       const exists = prev.find(f => f.id === filter.id);
-      return exists
+      const newFilters = exists
         ? prev.filter(f => f.id !== filter.id)
         : [...prev, filter];
+
+      console.log('[Filter] Filter toggled. Selected filters:', newFilters.map(f => f.name).join(', '));
+      console.log('[Filter] Total selected:', newFilters.length);
+
+      return newFilters;
     });
   };
 
   // Submit for processing
   const handleSubmit = async () => {
-    if (!photo || selectedFilters.length === 0) return;
+    console.log('[Submit] User clicked submit');
+
+    if (!photo) {
+      console.error('[Submit] No photo available');
+      alert('Please take or upload a photo first.');
+      return;
+    }
+
+    if (selectedFilters.length === 0) {
+      console.error('[Submit] No filters selected');
+      alert('Please select at least one filter.');
+      return;
+    }
+
+    console.log('[Submit] Starting processing with', selectedFilters.length, 'filters');
+    console.log('[Submit] Filters:', selectedFilters.map(f => f.name).join(', '));
 
     setStep('processing');
     const prompt = combinePrompts(selectedFilters);
+    console.log('[Submit] Combined prompt:', prompt);
 
-    const result = await generate({
-      prompt,
-      imageUrl: photo,
-      mode: 'edit'
-    });
+    try {
+      const result = await generate({
+        prompt,
+        imageUrl: photo,
+        mode: 'edit'
+      });
 
-    if (result.success && result.image) {
-      setResultImage(result.image);
-      setStep('result');
-    } else {
-      alert(result.error || 'Failed to process image');
+      console.log('[Submit] Generation result:', { success: result.success, cached: result.cached, hasImage: !!result.image });
+
+      if (result.success && result.image) {
+        console.log('[Submit] Image generated successfully. Size:', result.image.length);
+        setResultImage(result.image);
+        setStep('result');
+        console.log('[Submit] Moving to result step');
+      } else {
+        console.error('[Submit] Generation failed:', result.error);
+
+        // Use userMessage if available from API, otherwise use generic error
+        const errorMessage = result.userMessage || result.error || 'Failed to process image. Please try again.';
+        alert(errorMessage);
+        setStep('photo');
+        console.log('[Submit] Returning to photo step due to error');
+      }
+    } catch (err) {
+      console.error('[Submit] Unexpected error during generation:', err);
+      alert('An unexpected error occurred. Please try again.');
       setStep('photo');
     }
   };
 
   // Reset
   const reset = () => {
+    console.log('[Reset] Resetting app to start');
     setStep('start');
     setPhoto(null);
     setSelectedFilters([]);
     setResultImage(null);
+    console.log('[Reset] App reset complete');
   };
 
   return (
