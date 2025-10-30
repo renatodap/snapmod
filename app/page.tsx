@@ -191,11 +191,11 @@ export default function Home() {
               className="min-h-full pb-32"
             >
               {/* Photo Display */}
-              <div className="relative">
+              <div className="relative bg-black">
                 <img
                   src={photo}
                   alt="Your photo"
-                  className="w-full h-[40vh] object-cover"
+                  className="w-full max-h-[50vh] object-contain"
                 />
                 <button
                   onClick={reset}
@@ -204,7 +204,6 @@ export default function Home() {
                   <RotateCcw className="w-5 h-5" />
                 </button>
               </div>
-
               {/* Filter Selection */}
               <div className="px-6 pt-6">
                 <h3 className="text-2xl font-bold text-white mb-2">
@@ -327,11 +326,11 @@ export default function Home() {
               animate={{ opacity: 1, scale: 1 }}
               className="min-h-full pb-32"
             >
-              <div className="relative">
+              <div className="relative bg-black flex items-center justify-center min-h-[70vh]">
                 <img
                   src={resultImage}
                   alt="Result"
-                  className="w-full h-[70vh] object-cover"
+                  className="w-full max-h-[70vh] object-contain"
                 />
               </div>
 

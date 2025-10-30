@@ -3,47 +3,52 @@ export const maxDuration = 60;
 
 interface NanaBananaRequest {
   prompt: string;
-  imageUrl?: string; // For editing existing images
+  imageUrl?: string;
   mode: 'generate' | 'edit';
   aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3';
 }
 
 export async function POST(req: Request) {
   try {
-    const { prompt, imageUrl, mode, aspectRatio } = await req.json() as NanaBananaRequest;
+    const { prompt, imageUrl, mode } = await req.json() as NanaBananaRequest;
 
-    // Validate input
-    if (!prompt || prompt.length > 2000) {
-      return Response.json({ error: 'Invalid prompt' }, { status: 400 });
+    // Validate
+    if (!prompt || prompt.trim().length === 0) {
+      return Response.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
-    // For image editing, we need the image
     if (mode === 'edit' && !imageUrl) {
       return Response.json({ error: 'Image required for edit mode' }, { status: 400 });
     }
 
-    // Build message content for Gemini
-    const parts: any[] = [];
+    console.log('Processing request:', { mode, promptLength: prompt.length, hasImage: !!imageUrl });
 
-    // Add the image if in edit mode
+    // Build content array for OpenRouter
+    const content: any[] = [];
+
+    // Add image first if editing
     if (mode === 'edit' && imageUrl) {
-      // Extract base64 data if it's a data URL
       const base64Data = imageUrl.includes('base64,')
         ? imageUrl.split('base64,')[1]
         : imageUrl;
 
-      parts.push({
-        inline_data: {
-          mime_type: 'image/jpeg',
-          data: base64Data
+      content.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:image/jpeg;base64,${base64Data}`
         }
       });
     }
 
-    // Add the prompt
-    parts.push({ text: prompt });
+    // Add text prompt
+    content.push({
+      type: 'text',
+      text: prompt
+    });
 
-    // Call Gemini via OpenRouter
+    console.log('Sending to OpenRouter with content items:', content.length);
+
+    // Call OpenRouter
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -56,10 +61,8 @@ export async function POST(req: Request) {
         model: 'google/gemini-2.5-flash-image-preview',
         messages: [{
           role: 'user',
-          content: parts
-        }],
-        max_tokens: 4096,
-        stream: false
+          content: content
+        }]
       })
     });
 
@@ -73,33 +76,38 @@ export async function POST(req: Request) {
     }
 
     const data = await response.json();
-    console.log('OpenRouter response structure:', JSON.stringify({
-      choices: data.choices?.length,
-      hasContent: !!data.choices?.[0]?.message?.content,
-      contentType: typeof data.choices?.[0]?.message?.content
-    }));
+    console.log('Response type:', typeof data.choices?.[0]?.message?.content);
 
-    // Extract the response content
     const messageContent = data.choices?.[0]?.message?.content;
 
     if (!messageContent) {
-      console.error('No content in response:', data);
+      console.error('No content in response');
       return Response.json({
         error: 'No image returned',
-        details: 'API response contained no content'
+        details: 'API response had no content'
       }, { status: 500 });
     }
 
-    // Gemini returns base64 image data directly in content
-    // Check if it's already a data URL
+    // Gemini returns base64 image data
     let imageResult = messageContent;
 
-    // If it's base64 without data URL prefix, add it
-    if (!imageResult.startsWith('data:') && !imageResult.startsWith('http')) {
-      imageResult = `data:image/png;base64,${imageResult}`;
+    // If it's not a data URL yet, make it one
+    if (!imageResult.startsWith('data:')) {
+      // Check if it's just base64 or has some text
+      if (imageResult.length > 1000 && !imageResult.includes(' ')) {
+        // Likely base64
+        imageResult = `data:image/png;base64,${imageResult}`;
+      } else {
+        // It's text, not an image
+        console.error('Got text response instead of image:', imageResult.substring(0, 200));
+        return Response.json({
+          error: 'API returned text instead of image',
+          details: 'Try a different filter or simpler prompt'
+        }, { status: 500 });
+      }
     }
 
-    console.log('Image result type:', imageResult.substring(0, 50));
+    console.log('Returning image, starts with:', imageResult.substring(0, 50));
 
     return Response.json({
       success: true,
@@ -108,7 +116,7 @@ export async function POST(req: Request) {
     });
 
   } catch (error) {
-    console.error('Nano Banana API error:', error);
+    console.error('API error:', error);
     return Response.json({
       error: 'Server error',
       message: error instanceof Error ? error.message : 'Unknown error'
