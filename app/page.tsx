@@ -24,61 +24,59 @@ export default function Home() {
     ? FILTER_PRESETS
     : FILTER_PRESETS.filter(f => f.category === activeCategory);
 
-  // Handle camera
-  const handleCamera = async () => {
+  // Handle camera - triggers native camera app to take a photo
+  const handleCamera = () => {
     console.log('[Camera] User clicked camera button');
-    try {
-      console.log('[Camera] Requesting camera access...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
-      });
-      console.log('[Camera] Camera access granted');
+    console.log('[Camera] Triggering native camera app via file input');
 
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.play();
-      console.log('[Camera] Video element created and playing');
+    // Create a temporary file input to trigger the native camera
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.capture = 'environment'; // This triggers the camera app directly
 
-      await new Promise(resolve => {
-        video.onloadedmetadata = resolve;
-      });
-      console.log('[Camera] Video metadata loaded');
+    input.onchange = async (e) => {
+      const target = e.target as HTMLInputElement;
+      const file = target.files?.[0];
 
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      console.log('[Camera] Canvas created:', { width: canvas.width, height: canvas.height });
-
-      canvas.getContext('2d')?.drawImage(video, 0, 0);
-      console.log('[Camera] Image drawn to canvas');
-
-      const imageData = canvas.toDataURL('image/jpeg', 0.9);
-      console.log('[Camera] Image data created, size:', imageData.length);
-
-      setPhoto(imageData);
-      setStep('photo');
-      console.log('[Camera] Photo set, moving to photo step');
-
-      stream.getTracks().forEach(track => track.stop());
-      console.log('[Camera] Camera stream stopped');
-    } catch (err) {
-      console.error('[Camera] Error:', err);
-      console.error('[Camera] Error name:', err instanceof Error ? err.name : 'unknown');
-      console.error('[Camera] Error message:', err instanceof Error ? err.message : String(err));
-
-      let errorMessage = 'Failed to access camera. Please check permissions.';
-      if (err instanceof Error) {
-        if (err.name === 'NotAllowedError') {
-          errorMessage = 'Camera access denied. Please allow camera access in your browser settings.';
-        } else if (err.name === 'NotFoundError') {
-          errorMessage = 'No camera found on this device.';
-        } else if (err.name === 'NotReadableError') {
-          errorMessage = 'Camera is already in use by another application.';
-        }
+      if (!file) {
+        console.log('[Camera] No photo taken');
+        return;
       }
 
-      alert(errorMessage);
-    }
+      console.log('[Camera] Photo captured:', {
+        name: file.name,
+        type: file.type,
+        size: file.size
+      });
+
+      try {
+        console.log('[Camera] Compressing image...');
+        const compressed = await compressImage(file);
+        console.log('[Camera] Image compressed, size:', compressed.length);
+
+        setPhoto(compressed);
+        setStep('photo');
+        console.log('[Camera] Photo set, moving to photo step');
+      } catch (err) {
+        console.error('[Camera] Error:', err);
+        console.error('[Camera] Error details:', err instanceof Error ? err.message : String(err));
+
+        let errorMessage = 'Failed to process camera photo. Please try again.';
+        if (err instanceof Error) {
+          if (err.message.includes('size')) {
+            errorMessage = 'Photo is too large. Please try again.';
+          } else if (err.message.includes('type') || err.message.includes('format')) {
+            errorMessage = 'Unsupported photo format. Please try again.';
+          }
+        }
+
+        alert(errorMessage);
+      }
+    };
+
+    // Trigger the file input
+    input.click();
   };
 
   // Handle upload
