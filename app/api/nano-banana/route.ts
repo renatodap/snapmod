@@ -59,9 +59,38 @@ export async function POST(req: Request) {
 
     const data = await response.json();
 
-    // Extract image URL from response
-    // Nano Banana returns image in content or as URL
-    const imageResult = data.choices?.[0]?.message?.content;
+    console.log('OpenRouter response:', JSON.stringify(data, null, 2));
+
+    // Extract image from response
+    const messageContent = data.choices?.[0]?.message?.content;
+
+    if (!messageContent) {
+      console.error('No content in response:', data);
+      return Response.json({
+        error: 'No image returned from API',
+        details: 'Response had no content'
+      }, { status: 500 });
+    }
+
+    // Gemini returns markdown with image URLs or base64
+    // Extract URL from markdown: ![image](url) or just return as is if it's a data URL
+    let imageResult = messageContent;
+
+    // Check if it's markdown format
+    const markdownImageMatch = messageContent.match(/!\[.*?\]\((.*?)\)/);
+    if (markdownImageMatch) {
+      imageResult = markdownImageMatch[1];
+    }
+
+    // Check if it's a URL or data URL
+    if (!imageResult.startsWith('http') && !imageResult.startsWith('data:')) {
+      // If it's just text, log it and return error
+      console.error('Unexpected response format:', imageResult);
+      return Response.json({
+        error: 'Unexpected response format',
+        details: imageResult
+      }, { status: 500 });
+    }
 
     return Response.json({
       success: true,
