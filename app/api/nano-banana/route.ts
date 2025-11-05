@@ -1,13 +1,24 @@
-export const runtime = 'edge';
-export const maxDuration = 60;
+export const runtime = 'edge'
+export const maxDuration = 60
 
-import { checkRateLimit, getIdentifierFromRequest, formatResetTime } from '@/lib/rate-limit';
+import {
+  EmptyPromptError,
+  ImageRequiredError,
+  RateLimitError,
+  AIServiceError,
+  AIInvalidResponseError,
+  AITextResponseError,
+} from '@/lib/errors'
+import { successResponse, errorResponse } from '@/lib/api-response'
+import { withRequestTracing, createRequestLogger, measureAsync } from '@/lib/tracing'
+import { checkRateLimit, getIdentifierFromRequest } from '@/lib/rate-limit'
+import { APP_CONFIG } from '@/lib/config'
 
 interface NanaBananaRequest {
-  prompt: string;
-  imageUrl?: string;
-  mode: 'generate' | 'edit';
-  aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3';
+  prompt: string
+  imageUrl?: string
+  mode: 'generate' | 'edit'
+  aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3'
 }
 
 // System prompts to guide the AI model's behavior
@@ -47,438 +58,346 @@ QUALITY STANDARDS:
 - Professional composition and framing
 - Avoid artifacts, distortions, or uncanny elements
 
-Follow user instructions precisely while maintaining photographic realism.`
-};
+Follow user instructions precisely while maintaining photographic realism.`,
+}
 
-export async function POST(req: Request) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  console.log(`[${requestId}] API request received`);
+/**
+ * POST /api/nano-banana
+ * Generate or edit images using AI
+ */
+export const POST = withRequestTracing(async (req: Request, requestId: string) => {
+  const log = createRequestLogger(requestId)
 
   try {
-    // Rate limiting check
-    const identifier = getIdentifierFromRequest(req);
-    const rateLimit = checkRateLimit(identifier, 20, 60000); // 20 requests per minute
-
-    console.log(`[${requestId}] Rate limit check:`, {
-      identifier: identifier.substring(0, 20),
-      allowed: rateLimit.allowed,
-      remaining: rateLimit.remaining,
-    });
+    // 1. Rate Limiting
+    log.info('Checking rate limit')
+    const identifier = getIdentifierFromRequest(req)
+    const rateLimit = checkRateLimit(
+      identifier,
+      APP_CONFIG.rateLimit.requestsPerMinute,
+      APP_CONFIG.rateLimit.windowMs
+    )
 
     if (!rateLimit.allowed) {
-      const retryAfter = formatResetTime(rateLimit.resetAt);
-      console.error(`[${requestId}] Rate limit exceeded for ${identifier}`);
-      return Response.json({
-        error: 'Rate limit exceeded',
-        userMessage: `Too many requests. Please wait ${retryAfter} before trying again.`,
-        retryAfter,
-      }, {
-        status: 429,
-        headers: {
-          'Retry-After': String(Math.ceil((rateLimit.resetAt - Date.now()) / 1000)),
-        },
-      });
+      log.warn('Rate limit exceeded', { identifier })
+      throw new RateLimitError(rateLimit.resetAt, identifier)
     }
 
-    console.log(`[${requestId}] Parsing request body...`);
-    const { prompt, imageUrl, mode } = await req.json() as NanaBananaRequest;
+    log.debug('Rate limit check passed', {
+      identifier: identifier.substring(0, 20),
+      remaining: rateLimit.remaining,
+    })
 
-    console.log(`[${requestId}] Request parsed:`, {
+    // 2. Parse Request Body
+    log.info('Parsing request body')
+    const { prompt, imageUrl, mode } = (await req.json()) as NanaBananaRequest
+
+    log.info('Request parsed', {
       mode,
       promptLength: prompt?.length || 0,
       hasImage: !!imageUrl,
-      imageUrlPrefix: imageUrl?.substring(0, 50) || 'none'
-    });
+    })
 
-    // Validate
+    // 3. Validation
     if (!prompt || prompt.trim().length === 0) {
-      console.error(`[${requestId}] Validation failed: Empty prompt`);
-      return Response.json({
-        error: 'Please select at least one filter',
-        userMessage: 'You need to select at least one filter to apply.'
-      }, { status: 400 });
+      log.warn('Validation failed: empty prompt')
+      throw new EmptyPromptError()
     }
 
     if (mode === 'edit' && !imageUrl) {
-      console.error(`[${requestId}] Validation failed: No image for edit mode`);
-      return Response.json({
-        error: 'Image required for edit mode',
-        userMessage: 'Please take or upload a photo first.'
-      }, { status: 400 });
+      log.warn('Validation failed: no image for edit mode')
+      throw new ImageRequiredError()
     }
 
-    console.log(`[${requestId}] Validation passed`);
-    console.log(`[${requestId}] Processing request:`, { mode, promptLength: prompt.length, hasImage: !!imageUrl });
+    log.debug('Validation passed')
 
-    // Build messages array with system prompt
-    console.log(`[${requestId}] Building messages array for mode: ${mode}`);
-    const messages: any[] = [];
+    // 4. Build API Request
+    const messages = buildMessages(mode, prompt, imageUrl, log)
 
-    // Add system prompt first to guide the model's behavior
-    messages.push({
-      role: 'system',
-      content: mode === 'edit' ? SYSTEM_PROMPTS.edit : SYSTEM_PROMPTS.generate
-    });
-    console.log(`[${requestId}] System prompt added for mode: ${mode}`);
+    // 5. Call OpenRouter AI
+    const { result: aiResponse, duration } = await measureAsync(
+      'OpenRouter API call',
+      async () => {
+        log.info('Calling OpenRouter API', { model: APP_CONFIG.ai.model })
 
-    // Build user content array
-    const userContent: any[] = [];
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': process.env.VERCEL_URL || APP_CONFIG.app.url,
+            'X-Title': APP_CONFIG.app.name,
+          },
+          body: JSON.stringify({
+            model: APP_CONFIG.ai.model,
+            messages,
+          }),
+        })
 
-    // Add image first if editing
-    if (mode === 'edit' && imageUrl) {
-      console.log(`[${requestId}] Processing image data...`);
-      const base64Data = imageUrl.includes('base64,')
-        ? imageUrl.split('base64,')[1]
-        : imageUrl;
-
-      console.log(`[${requestId}] Image data size: ${base64Data.length} characters`);
-
-      userContent.push({
-        type: 'image_url',
-        image_url: {
-          url: `data:image/jpeg;base64,${base64Data}`
+        if (!response.ok) {
+          const errorText = await response.text()
+          log.error('OpenRouter API error', undefined, {
+            status: response.status,
+            error: errorText,
+          })
+          throw new AIServiceError(errorText, response.status)
         }
-      });
-      console.log(`[${requestId}] Image added to user content array`);
-    }
 
-    // Add text prompt
-    userContent.push({
-      type: 'text',
-      text: prompt
-    });
-    console.log(`[${requestId}] User prompt added to content array`);
-
-    // Add user message with content
-    messages.push({
-      role: 'user',
-      content: userContent
-    });
-
-    console.log(`[${requestId}] Messages array built with ${messages.length} messages`);
-    console.log(`[${requestId}] System prompt length: ${SYSTEM_PROMPTS[mode].length} characters`);
-    console.log(`[${requestId}] Sending request to OpenRouter...`);
-
-    const requestBody = {
-      model: 'google/gemini-2.5-flash-image-preview',
-      messages: messages
-    };
-
-    console.log(`[${requestId}] Request body structure:`, {
-      model: requestBody.model,
-      messageCount: requestBody.messages.length,
-      hasSystemPrompt: requestBody.messages[0].role === 'system'
-    });
-
-    // Call OpenRouter
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.VERCEL_URL || 'https://snapmod.vercel.app',
-        'X-Title': 'SnapMod',
-      },
-      body: JSON.stringify(requestBody)
-    });
-
-    console.log(`[${requestId}] OpenRouter response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[${requestId}] OpenRouter error (${response.status}):`, errorText);
-
-      let userMessage = 'Failed to process your image. Please try again.';
-      if (response.status === 401) {
-        userMessage = 'Authentication error. Please contact support.';
-      } else if (response.status === 429) {
-        userMessage = 'Too many requests. Please wait a moment and try again.';
-      } else if (response.status >= 500) {
-        userMessage = 'AI service is temporarily unavailable. Please try again later.';
+        return response.json()
       }
+    )
 
-      return Response.json({
-        error: 'Image generation failed',
-        userMessage,
-        details: errorText
-      }, { status: response.status });
-    }
+    log.info('OpenRouter API call completed', { duration })
 
-    console.log(`[${requestId}] Parsing OpenRouter response...`);
-    const data = await response.json();
-    console.log(`[${requestId}] Response parsed. Full response structure:`, JSON.stringify(data, null, 2));
+    // 6. Extract and Validate Image
+    const imageResult = extractImageFromResponse(aiResponse, log)
 
-    // Log the entire response structure for debugging
-    console.log(`[${requestId}] Response keys:`, Object.keys(data));
-    console.log(`[${requestId}] Choices array:`, data.choices);
-    console.log(`[${requestId}] First choice:`, data.choices?.[0]);
-    console.log(`[${requestId}] Message object:`, data.choices?.[0]?.message);
-
-    const message = data.choices?.[0]?.message;
-    const messageContent = message?.content;
-    const messageImages = message?.images;
-
-    console.log(`[${requestId}] Message object:`, message);
-    console.log(`[${requestId}] Content type:`, typeof messageContent);
-    console.log(`[${requestId}] Content length:`, messageContent?.length || 0);
-    console.log(`[${requestId}] Content value:`, messageContent ? messageContent.substring(0, 500) : 'NULL/UNDEFINED');
-    console.log(`[${requestId}] Images array:`, messageImages);
-    console.log(`[${requestId}] Images length:`, messageImages?.length || 0);
-
-    // Gemini 2.5 Flash Image returns images in the 'images' array, not 'content'
-    let imageResult: string | null = null;
-
-    if (messageImages && messageImages.length > 0) {
-      console.log(`[${requestId}] Found image in images array!`);
-      console.log(`[${requestId}] Images array length:`, messageImages.length);
-      console.log(`[${requestId}] First image type:`, typeof messageImages[0]);
-      console.log(`[${requestId}] First image (full):`, JSON.stringify(messageImages[0]).substring(0, 500));
-
-      // The image might be a URL or base64 string or object with various formats
-      const firstImage = messageImages[0];
-
-      if (typeof firstImage === 'string') {
-        console.log(`[${requestId}] Image is a string`);
-        imageResult = firstImage;
-      } else if (typeof firstImage === 'object' && firstImage !== null) {
-        console.log(`[${requestId}] Image is an object, keys:`, Object.keys(firstImage));
-
-        // Try various possible properties - OpenRouter format has nested image_url.url
-        if (firstImage.image_url && firstImage.image_url.url) {
-          console.log(`[${requestId}] Found .image_url.url property (OpenRouter format)`);
-          imageResult = firstImage.image_url.url;
-        } else if (firstImage.url) {
-          console.log(`[${requestId}] Found .url property`);
-          imageResult = firstImage.url;
-        } else if (firstImage.b64_json) {
-          console.log(`[${requestId}] Found .b64_json property`);
-          imageResult = `data:image/png;base64,${firstImage.b64_json}`;
-        } else if (firstImage.data) {
-          console.log(`[${requestId}] Found .data property`);
-          imageResult = firstImage.data;
-        } else if (firstImage.image) {
-          console.log(`[${requestId}] Found .image property`);
-          imageResult = firstImage.image;
-        } else if (firstImage.base64) {
-          console.log(`[${requestId}] Found .base64 property`);
-          imageResult = `data:image/png;base64,${firstImage.base64}`;
-        } else {
-          console.error(`[${requestId}] Unknown image object structure:`, firstImage);
-        }
-      }
-
-      console.log(`[${requestId}] Extracted image result (first 100 chars):`, imageResult?.substring(0, 100));
-      console.log(`[${requestId}] Image result length:`, imageResult?.length || 0);
-    } else if (messageContent && messageContent.trim().length > 0) {
-      console.log(`[${requestId}] Found image in content field`);
-      imageResult = messageContent;
-    } else {
-      console.error(`[${requestId}] No image in response!`);
-      console.error(`[${requestId}] Full response:`, JSON.stringify(data, null, 2));
-
-      // Check if there's an error message from OpenRouter
-      const errorMsg = data.error?.message || data.error || 'Unknown error';
-      console.error(`[${requestId}] OpenRouter error:`, errorMsg);
-
-      // Return detailed debugging info to frontend
-      return Response.json({
-        error: 'No image returned',
-        userMessage: `AI service error: ${typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg)}. Please check console for details.`,
-        details: 'API response had no content or images',
-        debug: {
-          requestId,
-          responseKeys: Object.keys(data),
-          hasChoices: !!data.choices,
-          choicesLength: data.choices?.length,
-          firstChoice: data.choices?.[0],
-          error: data.error,
-          fullResponse: data
-        }
-      }, { status: 500 });
-    }
-
-    // Null check - this should never happen due to earlier check, but TypeScript needs it
     if (!imageResult) {
-      console.error(`[${requestId}] imageResult is null after extraction`);
-      console.error(`[${requestId}] Images array was:`, messageImages);
-      console.error(`[${requestId}] Content was:`, messageContent);
-
-      return Response.json({
-        error: 'Failed to extract image',
-        userMessage: 'Failed to extract image from API response. Please try again.',
-        details: 'Image extraction returned null',
-        debug: {
-          requestId,
-          hasImages: !!messageImages,
-          imagesLength: messageImages?.length,
-          firstImage: messageImages?.[0],
-          firstImageType: typeof messageImages?.[0],
-          firstImageKeys: messageImages?.[0] && typeof messageImages[0] === 'object' ? Object.keys(messageImages[0]) : null,
-          contentLength: messageContent?.length || 0
-        }
-      }, { status: 500 });
+      log.error('No image in response', { responseKeys: Object.keys(aiResponse) })
+      throw new AIInvalidResponseError('No image data in response', JSON.stringify(aiResponse))
     }
 
-    // Comprehensive validation to detect text responses
-    console.log(`[${requestId}] Validating response content...`);
+    // 7. Validate Image Format
+    const validatedImage = validateImageData(imageResult, log)
 
-    // Helper function to check if content is valid base64
-    const isValidBase64 = (str: string): boolean => {
-      // Base64 should only contain A-Z, a-z, 0-9, +, /, and = for padding
-      const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-      return base64Regex.test(str);
-    };
+    log.info('Image generation successful', {
+      imageSize: validatedImage.length,
+      cached: false,
+    })
 
-    // Helper function to detect if content is text
-    const isTextResponse = (str: string): boolean => {
-      // Common text indicators
-      const textIndicators = [
-        /^(here|absolutely|sure|certainly|of course)/i,
-        /\b(image|photo|picture|transformed|applied|filter)\b/i,
-        /(\.|\!|\?)(\s|$)/,  // Sentences ending with punctuation
-        /\s{2,}/,  // Multiple spaces (common in text)
-        /\n/,  // Newlines in sentences
-      ];
-
-      // If it matches common text patterns, it's likely text
-      for (const pattern of textIndicators) {
-        if (pattern.test(str)) {
-          console.log(`[${requestId}] Text indicator matched:`, pattern);
-          return true;
-        }
-      }
-
-      // If it has lots of spaces, it's likely text (base64 has no spaces)
-      const spaceRatio = (str.match(/ /g) || []).length / str.length;
-      if (spaceRatio > 0.05) {
-        console.log(`[${requestId}] High space ratio detected:`, spaceRatio);
-        return true;
-      }
-
-      // If it's relatively short and contains common words
-      if (str.length < 500 && /\b(the|is|are|was|were|your|here)\b/i.test(str)) {
-        console.log(`[${requestId}] Short text with common words detected`);
-        return true;
-      }
-
-      return false;
-    };
-
-    // If it's not a data URL yet, validate and convert
-    if (!imageResult.startsWith('data:')) {
-      console.log(`[${requestId}] Content is not a data URL, checking format...`);
-      console.log(`[${requestId}] First 200 chars:`, imageResult.substring(0, 200));
-
-      // First check: Is this clearly text?
-      if (isTextResponse(imageResult)) {
-        console.error(`[${requestId}] DETECTED TEXT RESPONSE:`, imageResult.substring(0, 300));
-        return Response.json({
-          error: 'API returned text instead of image',
-          userMessage: 'The AI responded with text instead of generating an image. This might mean the prompt was unclear. Please try again with different filters or a different photo.',
-          details: imageResult.substring(0, 200),
-          hint: 'Try using fewer filters or a clearer photo'
-        }, { status: 500 });
-      }
-
-      // Second check: Does it look like valid base64?
-      const trimmed = imageResult.trim();
-      if (!isValidBase64(trimmed)) {
-        console.error(`[${requestId}] INVALID BASE64 FORMAT:`, imageResult.substring(0, 200));
-        return Response.json({
-          error: 'Invalid response format',
-          userMessage: 'Received an invalid response from the AI. Please try again.',
-          details: 'Response is neither text nor valid base64'
-        }, { status: 500 });
-      }
-
-      // Third check: Is it long enough to be an image?
-      // Even a tiny 1x1 PNG is ~100 bytes in base64, realistic images are 10KB+
-      if (trimmed.length < 1000) {
-        console.error(`[${requestId}] RESPONSE TOO SHORT for image:`, trimmed.length, 'chars');
-        console.error(`[${requestId}] Content:`, imageResult);
-        return Response.json({
-          error: 'Response too short to be an image',
-          userMessage: 'The AI response was incomplete. Please try again.',
-          details: `Only ${trimmed.length} characters received`
-        }, { status: 500 });
-      }
-
-      // If all checks pass, it's likely valid base64 image data
-      console.log(`[${requestId}] Valid base64 detected (${trimmed.length} chars), converting to data URL`);
-      imageResult = `data:image/png;base64,${trimmed}`;
-    } else {
-      console.log(`[${requestId}] Already a data URL`);
-    }
-
-    // Final validation: Verify data URL format
-    if (!imageResult.match(/^data:image\/(png|jpeg|jpg|webp);base64,/)) {
-      console.error(`[${requestId}] INVALID DATA URL FORMAT:`, imageResult.substring(0, 100));
-      return Response.json({
-        error: 'Invalid image format',
-        userMessage: 'The image format is not supported. Please try again.',
-        details: 'Data URL does not match expected format'
-      }, { status: 500 });
-    }
-
-    console.log(`[${requestId}] Image validated successfully!`);
-    console.log(`[${requestId}] Data URL prefix:`, imageResult.substring(0, 50));
-    console.log(`[${requestId}] Total image data size: ${imageResult.length} characters`);
-
-    // Final sanity check: Verify the base64 portion is actually valid
-    try {
-      const base64Part = imageResult.split(',')[1];
-      if (!base64Part) {
-        throw new Error('No base64 data after comma');
-      }
-
-      // Try to decode a small portion to verify it's valid base64
-      const testDecode = atob(base64Part.substring(0, 100));
-      console.log(`[${requestId}] Base64 decode test successful (first 100 chars decoded to ${testDecode.length} bytes)`);
-
-      // Check for PNG or JPEG magic numbers in decoded data
-      const firstBytes = testDecode.substring(0, 4);
-      const isPNG = firstBytes.charCodeAt(0) === 0x89 && firstBytes.charCodeAt(1) === 0x50;
-      const isJPEG = firstBytes.charCodeAt(0) === 0xFF && firstBytes.charCodeAt(1) === 0xD8;
-
-      if (!isPNG && !isJPEG) {
-        console.warn(`[${requestId}] Warning: Data doesn't start with PNG or JPEG signature`);
-        console.warn(`[${requestId}] First bytes:`, Array.from(firstBytes).map(c => c.charCodeAt(0).toString(16)));
-        // Continue anyway - might be WebP or other format
-      } else {
-        console.log(`[${requestId}] Image format verified: ${isPNG ? 'PNG' : 'JPEG'}`);
-      }
-    } catch (decodeError) {
-      console.error(`[${requestId}] FAILED to decode base64:`, decodeError);
-      return Response.json({
-        error: 'Invalid base64 image data',
-        userMessage: 'The AI returned invalid image data. Please try again with different filters.',
-        details: decodeError instanceof Error ? decodeError.message : 'Base64 decode failed'
-      }, { status: 500 });
-    }
-
-    console.log(`[${requestId}] All validations passed! Returning image.`);
-
-    return Response.json({
-      success: true,
-      image: imageResult,
-      cached: false
-    });
-
+    // 8. Return Success
+    return successResponse(
+      {
+        image: validatedImage,
+        cached: false,
+      },
+      { requestId }
+    )
   } catch (error) {
-    console.error(`[${requestId}] Unexpected error:`, error);
-    console.error(`[${requestId}] Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+    // Error handling is done by withRequestTracing wrapper
+    throw error
+  }
+})
 
-    let userMessage = 'An unexpected error occurred. Please try again.';
-    if (error instanceof SyntaxError) {
-      userMessage = 'Failed to process the response. Please try again.';
-    } else if (error instanceof TypeError) {
-      userMessage = 'Network error. Please check your connection and try again.';
+/**
+ * Build messages array for AI request
+ */
+function buildMessages(
+  mode: 'generate' | 'edit',
+  prompt: string,
+  imageUrl: string | undefined,
+  log: ReturnType<typeof createRequestLogger>
+): any[] {
+  log.debug('Building messages array', { mode })
+
+  const messages: any[] = []
+
+  // Add system prompt
+  messages.push({
+    role: 'system',
+    content: mode === 'edit' ? SYSTEM_PROMPTS.edit : SYSTEM_PROMPTS.generate,
+  })
+
+  // Build user content
+  const userContent: any[] = []
+
+  // Add image if editing
+  if (mode === 'edit' && imageUrl) {
+    const base64Data = imageUrl.includes('base64,') ? imageUrl.split('base64,')[1] : imageUrl
+
+    log.debug('Adding image to request', { imageSize: base64Data.length })
+
+    userContent.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:image/jpeg;base64,${base64Data}`,
+      },
+    })
+  }
+
+  // Add text prompt
+  userContent.push({
+    type: 'text',
+    text: prompt,
+  })
+
+  messages.push({
+    role: 'user',
+    content: userContent,
+  })
+
+  log.debug('Messages array built', { messageCount: messages.length })
+
+  return messages
+}
+
+/**
+ * Extract image from OpenRouter response
+ */
+function extractImageFromResponse(
+  response: any,
+  log: ReturnType<typeof createRequestLogger>
+): string | null {
+  const message = response.choices?.[0]?.message
+  const messageContent = message?.content
+  const messageImages = message?.images
+
+  log.debug('Extracting image from response', {
+    hasMessage: !!message,
+    hasContent: !!messageContent,
+    hasImages: !!messageImages,
+    imagesLength: messageImages?.length || 0,
+  })
+
+  // Try images array first (OpenRouter format)
+  if (messageImages && messageImages.length > 0) {
+    const firstImage = messageImages[0]
+
+    if (typeof firstImage === 'string') {
+      log.debug('Found image as string in images array')
+      return firstImage
     }
 
-    return Response.json({
-      error: 'Server error',
-      userMessage,
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    if (typeof firstImage === 'object' && firstImage !== null) {
+      // Try various possible properties
+      if (firstImage.image_url?.url) {
+        log.debug('Found image at .image_url.url')
+        return firstImage.image_url.url
+      }
+      if (firstImage.url) {
+        log.debug('Found image at .url')
+        return firstImage.url
+      }
+      if (firstImage.b64_json) {
+        log.debug('Found image at .b64_json')
+        return `data:image/png;base64,${firstImage.b64_json}`
+      }
+      if (firstImage.data) {
+        log.debug('Found image at .data')
+        return firstImage.data
+      }
+    }
   }
+
+  // Try content field
+  if (messageContent && typeof messageContent === 'string' && messageContent.trim().length > 0) {
+    log.debug('Found content in message.content')
+    return messageContent
+  }
+
+  return null
+}
+
+/**
+ * Validate image data format
+ */
+function validateImageData(
+  imageData: string,
+  log: ReturnType<typeof createRequestLogger>
+): string {
+  log.debug('Validating image data', { dataLength: imageData.length })
+
+  // Check if it's text response (should be image)
+  if (isTextResponse(imageData)) {
+    log.error('AI returned text instead of image', { preview: imageData.substring(0, 200) })
+    throw new AITextResponseError(imageData)
+  }
+
+  // If not a data URL, convert it
+  if (!imageData.startsWith('data:')) {
+    const trimmed = imageData.trim()
+
+    // Validate base64 format
+    if (!isValidBase64(trimmed)) {
+      log.error('Invalid base64 format', { preview: trimmed.substring(0, 200) })
+      throw new AIInvalidResponseError('Invalid base64 format', trimmed.substring(0, 200))
+    }
+
+    // Check minimum length
+    if (trimmed.length < 1000) {
+      log.error('Response too short for image', { length: trimmed.length })
+      throw new AIInvalidResponseError('Response too short to be an image', `${trimmed.length} chars`)
+    }
+
+    log.debug('Converting to data URL')
+    imageData = `data:image/png;base64,${trimmed}`
+  }
+
+  // Validate data URL format
+  if (!imageData.match(/^data:image\/(png|jpeg|jpg|webp);base64,/)) {
+    log.error('Invalid data URL format', { preview: imageData.substring(0, 100) })
+    throw new AIInvalidResponseError('Invalid data URL format', imageData.substring(0, 100))
+  }
+
+  // Verify base64 can be decoded
+  try {
+    const base64Part = imageData.split(',')[1]
+    if (!base64Part) {
+      throw new Error('No base64 data after comma')
+    }
+
+    // Test decode a portion
+    const testDecode = atob(base64Part.substring(0, 100))
+    log.debug('Base64 decode test successful', { testLength: testDecode.length })
+
+    // Check for image magic numbers
+    const firstBytes = testDecode.substring(0, 4)
+    const isPNG = firstBytes.charCodeAt(0) === 0x89 && firstBytes.charCodeAt(1) === 0x50
+    const isJPEG = firstBytes.charCodeAt(0) === 0xff && firstBytes.charCodeAt(1) === 0xd8
+
+    if (isPNG || isJPEG) {
+      log.debug('Image format verified', { format: isPNG ? 'PNG' : 'JPEG' })
+    } else {
+      log.warn('Image magic numbers not detected (may be WebP or other format)')
+    }
+  } catch (decodeError) {
+    log.error('Base64 decode failed', decodeError as Error)
+    throw new AIInvalidResponseError(
+      'Failed to decode base64 image data',
+      decodeError instanceof Error ? decodeError.message : 'Unknown decode error'
+    )
+  }
+
+  log.debug('Image validation complete')
+  return imageData
+}
+
+/**
+ * Check if content is text (not image data)
+ */
+function isTextResponse(str: string): boolean {
+  const textIndicators = [
+    /^(here|absolutely|sure|certainly|of course)/i,
+    /\b(image|photo|picture|transformed|applied|filter)\b/i,
+    /(\.|\!|\?)(\s|$)/, // Sentences ending with punctuation
+    /\s{2,}/, // Multiple spaces (common in text)
+    /\n/, // Newlines in sentences
+  ]
+
+  for (const pattern of textIndicators) {
+    if (pattern.test(str)) {
+      return true
+    }
+  }
+
+  // High space ratio indicates text
+  const spaceRatio = (str.match(/ /g) || []).length / str.length
+  if (spaceRatio > 0.05) {
+    return true
+  }
+
+  // Short text with common words
+  if (str.length < 500 && /\b(the|is|are|was|were|your|here)\b/i.test(str)) {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Check if string is valid base64
+ */
+function isValidBase64(str: string): boolean {
+  const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/
+  return base64Regex.test(str)
 }
